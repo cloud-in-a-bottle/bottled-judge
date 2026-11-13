@@ -1,0 +1,12 @@
+[app]
+name = "judge"
+version = "0.0.1"
+description = "Competitive programming judge"
+
+[runtime.container]
+image = "Containerfile"
+port = 8080
+
+[resources]
+memory_mb = 3072
+cpu_cores = 2
