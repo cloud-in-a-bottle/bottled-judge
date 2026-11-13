@@ -1,0 +1,1 @@
+cat /tmp/s/x
