@@ -225,8 +225,8 @@ let route () =
       let tail = if tail = [ "" ] then [] else tail in
       (match env "REQUEST_METHOD", tail with
       | "GET", _ -> get c tail
-       | "POST", [ "submit" ] -> post c
-       | _ -> fail "405 Method Not Allowed" "Method not allowed")
+      | "POST", [ "submit" ] -> post c
+      | _ -> fail "405 Method Not Allowed" "Method not allowed")
   | "" :: tail -> Admin.handle (if tail = [ "" ] then [] else tail)
   | _ -> fail "404 Not Found" "Not found"
 
