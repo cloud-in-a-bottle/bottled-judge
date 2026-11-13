@@ -9,6 +9,10 @@ let days y m d =
 
 let time s = Scanf.sscanf s "%d-%d-%d %d:%d%!" (fun y m d h mi -> (days y m d * 86400) + (h * 3600) + (mi * 60))
 
+let format_utc stamp =
+  let t = Unix.gmtime (float stamp) in
+  Printf.sprintf "%04d-%02d-%02d %02d:%02d" (t.tm_year + 1900) (t.tm_mon + 1) t.tm_mday t.tm_hour t.tm_min
+
 let problem dir name =
   let h, _ = Kv.read (Filename.concat (Filename.concat dir name) "problem.txt") in
   { name; title = Kv.get h "title"; time = int_of_string (Kv.get h "time"); memory = int_of_string (Kv.get h "memory") }

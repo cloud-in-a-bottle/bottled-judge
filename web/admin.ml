@@ -14,22 +14,11 @@ let page ?(headers = []) title body =
 
 let redirect target = View.send ~headers:[ "Location", target ] "303 See Other" "text/html; charset=utf-8" ""
 
-let id_ok id =
+let contest_id_ok id =
   String.length id > 0 && String.length id <= 64 &&
   String.for_all (function 'a'..'z' | 'A'..'Z' | '0'..'9' | '-' | '_' -> true | _ -> false) id
 
-let submission_id_ok id =
-  String.length id = 30 && id.[13] = '-' &&
-  let rec check i =
-    if i = 30 then true
-    else if i = 13 then check (i + 1)
-    else let c = id.[i] in
-      if (i < 13 && c >= '0' && c <= '9') ||
-         (i > 13 && ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) then check (i + 1) else false
-  in
-  check 0
-
-let valid_id id = if not (id_ok id) then fail "404 Not Found" "Unknown contest" else id
+let valid_id id = if not (contest_id_ok id) then fail "404 Not Found" "Unknown contest" else id
 
 let letter p =
   if String.length p <> 1 || p.[0] < 'a' || p.[0] > 'z' then fail "404 Not Found" "Unknown problem";
@@ -46,11 +35,6 @@ let draft id =
   if not (Sys.file_exists folder) || not (Bj.Admin_data.directory folder) then
     fail "404 Not Found" "Unknown draft";
   folder
-
-let editable id =
-  let dir = draft id in
-  if Sys.file_exists (path dir ".publish") then fail "409 Conflict" "Publishing in progress";
-  dir
 
 let contest_fields fields =
   let title = get fields "title" in
@@ -76,12 +60,7 @@ let contest_file dir title secret start stop =
     [ "title", title; "token", secret; "start", start; "end", stop ] ""
 
 let next_time minutes =
-  let t = Unix.gmtime (Unix.gettimeofday () +. float (minutes * 60)) in
-  Printf.sprintf "%04d-%02d-%02d %02d:%02d" (t.tm_year + 1900) (t.tm_mon + 1) t.tm_mday t.tm_hour t.tm_min
-
-let date stamp =
-  let t = Unix.gmtime (float stamp) in
-  Printf.sprintf "%04d-%02d-%02d %02d:%02d UTC" (t.tm_year + 1900) (t.tm_mon + 1) t.tm_mday t.tm_hour t.tm_min
+  Bj.Contest.format_utc (int_of_float (Unix.gettimeofday ()) + minutes * 60)
 
 let contest_form action title start stop button =
   "<form method=\"post\" enctype=\"multipart/form-data\" action=\"" ^ escape action ^ "\">" ^
@@ -140,7 +119,7 @@ let post_button action label =
 
 let list_contests () =
   let rows dir status =
-    let ids = List.filter id_ok (Array.to_list (Sys.readdir dir)) in
+    let ids = List.filter contest_id_ok (Array.to_list (Sys.readdir dir)) in
     List.filter_map (fun id ->
       try
         let c = Bj.Contest.load (path dir id) in
@@ -162,7 +141,7 @@ let new_contest () =
   redirect ("/" ^ id)
 
 let update_contest id =
-  let dir = editable id in
+  let dir = draft id in
   let title, start, stop = contest_fields (form ()) in
   future start;
   let c = Bj.Contest.load dir in
@@ -172,33 +151,22 @@ let update_contest id =
 let draft_page id dir =
   let c = Bj.Contest.load dir in
   let base = "/" ^ id in
-  let busy = Sys.file_exists (path dir ".publish") in
-  let error = path dir ".error" in
-  let message = if Sys.file_exists error then
-      let ic = open_in error in
-      let s = input_line ic in
-      close_in ic;
-      "<p>Publish failed: " ^ escape s ^ "</p>"
-    else "" in
   let problems = List.map (fun p ->
     "<li>" ^ link (base ^ "/p/" ^ p.Bj.Contest.name) p.title ^ "</li>") c.problems in
-  page ~headers:(if busy then [ "Refresh", "2" ] else []) c.title
-    ("<p>Draft. Only you can see it. " ^ (if busy then "Publishing..." else "") ^ "</p>" ^ message ^
+  page c.title
+    ("<p>Draft. Only you can see it.</p>" ^
     contest_form base c.title
       (Bj.Kv.get (fst (Bj.Kv.read (path dir "contest.txt"))) "start")
       (Bj.Kv.get (fst (Bj.Kv.read (path dir "contest.txt"))) "end") "Save" ^
     "<h2>Problems</h2><ol>" ^ String.concat "" problems ^ "</ol>" ^
-    (if busy then "" else problem_form (base ^ "/p") "" "2000" "256" "" "Add problem") ^
-    (if busy then "" else post_button (base ^ "/publish") "Publish" ^
-      post_button (base ^ "/delete") "Delete draft"))
+    problem_form (base ^ "/p") "" "2000" "256" "" "Add problem" ^
+    post_button (base ^ "/publish") "Publish" ^ post_button (base ^ "/delete") "Delete draft")
 
 let draft_problem id name =
   let dir = draft id in
   let folder = load_problem dir name in
   let h, _ = Bj.Kv.read (path folder "problem.txt") in
-  let ic = open_in_bin (path folder "statement.html") in
-  let statement = really_input_string ic (in_channel_length ic) in
-  close_in ic;
+  let statement = Bj.File.read (path folder "statement.html") in
   let base = "/" ^ id ^ "/p/" ^ name in
   let tests = path folder "tests" in
   let count = List.length (test_numbers tests) in
@@ -213,7 +181,7 @@ let draft_problem id name =
     test_form (base ^ "/tests") ^ post_button (base ^ "/delete") "Delete problem")
 
 let add_problem id =
-  let dir = editable id in
+  let dir = draft id in
   let title, time, memory, statement = problem_fields (form ()) in
   let rec choose letter =
     if letter > Char.code 'z' then bad "Maximum 26 problems";
@@ -228,14 +196,14 @@ let add_problem id =
   redirect ("/" ^ id ^ "/p/" ^ name)
 
 let edit_problem id name =
-  let dir = editable id in
+  let dir = draft id in
   let folder = load_problem dir name in
   let title, time, memory, statement = problem_fields (form ()) in
   save_problem folder title time memory statement;
   redirect ("/" ^ id ^ "/p/" ^ name)
 
 let replace_tests id name =
-  let dir = editable id in
+  let dir = draft id in
   let folder = load_problem dir name in
   let fields = form ~limit:4194304 () in
   (try Test_archive.replace folder (get fields "archive") with
@@ -245,20 +213,21 @@ let replace_tests id name =
   redirect ("/" ^ id ^ "/p/" ^ name)
 
 let delete_problem id name =
-  let dir = editable id in
+  let dir = draft id in
   Bj.Admin_data.remove (load_problem dir name);
   redirect ("/" ^ id)
 
 let publish id =
-  let dir = editable id in
+  let dir = draft id in
   (try ignore (Bj.Admin_data.validate (data ()) id) with
   | Failure message -> bad message
   | ex -> bad (Printexc.to_string ex));
-  Bj.Admin_data.write (path dir ".publish") "" 0o600;
+  Array.iter (fun name -> if name.[0] = '.' then Bj.Admin_data.remove (path dir name)) (Sys.readdir dir);
+  Sys.rename dir (Bj.Admin_data.published (data ()) id);
   redirect ("/" ^ id)
 
 let delete_draft id =
-  Bj.Admin_data.remove (editable id);
+  Bj.Admin_data.remove (draft id);
   redirect "/"
 
 let published_page id dir =
@@ -266,7 +235,7 @@ let published_page id dir =
   let entries kind =
     let folder = path (data ()) kind in
     List.filter_map (fun file ->
-      if not (submission_id_ok file) then None else try
+      if not (Bj.Sub.id_ok file) then None else try
         let s = Bj.Sub.read (path folder file) in
         if s.contest = id then Some s else None
       with _ -> None) (Array.to_list (Sys.readdir folder)) in
@@ -279,7 +248,7 @@ let published_page id dir =
     "</td><td>" ^ escape s.problem ^ "</td><td>" ^ escape status ^ "</td></tr>") recent in
   let problems = List.map (fun p -> "<li>" ^ escape (p.Bj.Contest.name ^ ": " ^ p.title) ^ "</li>") c.problems in
   page c.title ("<p>Contest link: " ^ link ("/c/" ^ c.token) ("/c/" ^ c.token) ^ "</p>" ^
-    "<p>" ^ date c.start ^ " to " ^ date c.stop ^ "</p>" ^
+    "<p>" ^ Bj.Contest.format_utc c.start ^ " UTC to " ^ Bj.Contest.format_utc c.stop ^ " UTC</p>" ^
     "<p>" ^ string_of_int (List.length all) ^ " submissions; " ^
     string_of_int (List.length (List.filter (fun s -> s.Bj.Sub.result = None) all)) ^ " pending.</p>" ^
     "<h2>Problems</h2><ol>" ^ String.concat "" problems ^ "</ol><h2>Recent submissions</h2>" ^
@@ -287,7 +256,7 @@ let published_page id dir =
     String.concat "" rows ^ "</table>")
 
 let view_submission id sid =
-  if not (submission_id_ok sid) then fail "404 Not Found" "Unknown submission";
+  if not (Bj.Sub.id_ok sid) then fail "404 Not Found" "Unknown submission";
   let folders = [ path (data ()) "done"; path (data ()) "pending" ] in
   let file = match List.find_opt (fun dir -> Sys.file_exists (path dir sid)) folders with
     | Some dir -> path dir sid
@@ -298,10 +267,7 @@ let view_submission id sid =
     | Some r -> Printf.sprintf "%s test=%d cpu=%d" r.verdict r.test r.cpu in
   let ce = path (path (data ()) "done") (sid ^ ".ce") in
   let error = if Sys.file_exists ce then
-    let ic = open_in_bin ce in
-    let text = really_input_string ic (in_channel_length ic) in
-    close_in ic;
-    "<h2>Compiler output</h2><pre>" ^ escape text ^ "</pre>" else "" in
+    "<h2>Compiler output</h2><pre>" ^ escape (Bj.File.read ce) ^ "</pre>" else "" in
   page "Submission" ("<p>" ^ link ("/" ^ id) "Back to contest" ^ "</p>" ^
     "<p>" ^ escape (s.name ^ " / " ^ s.problem ^ " / " ^ result) ^ "</p>" ^
     "<h2>Source</h2><pre>" ^ escape s.source ^ "</pre>" ^ error)

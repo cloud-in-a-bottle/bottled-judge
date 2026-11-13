@@ -27,10 +27,6 @@ let open_now c =
 
 let started c = int_of_float (Unix.gettimeofday ()) >= c.Bj.Contest.start
 
-let date timestamp =
-  let t = Unix.gmtime (float timestamp) in
-  Printf.sprintf "%04d-%02d-%02d %02d:%02d UTC" (t.tm_year + 1900) (t.tm_mon + 1) t.tm_mday t.tm_hour t.tm_min
-
 let problem c name =
   match List.find_opt (fun p -> p.Bj.Contest.name = name) c.Bj.Contest.problems with
   | Some p -> p
@@ -63,27 +59,10 @@ let submit_form c selected =
   "<p><label>Or upload a file <input type=\"file\" name=\"file\"></label></p>" ^
   "<p><button type=\"submit\">Submit</button></p></form>"
 
-let read_file file =
-  let ic = open_in_bin file in
-  let result = really_input_string ic (in_channel_length ic) in
-  close_in ic;
-  result
-
-let id_ok id =
-  String.length id = 30 && id.[13] = '-' &&
-  let rec check i =
-    if i = 30 then true
-    else if i = 13 then check (i + 1)
-    else let c = id.[i] in
-      if (i < 13 && c >= '0' && c <= '9') ||
-         (i > 13 && ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) then check (i + 1) else false
-  in
-  check 0
-
 let submissions c =
   let items dir =
     let folder = path (data ()) dir in
-    let names = List.filter id_ok (Array.to_list (Sys.readdir folder)) in
+    let names = List.filter Bj.Sub.id_ok (Array.to_list (Sys.readdir folder)) in
     List.filter_map (fun id ->
       try let s = Bj.Sub.read (path folder id) in
         if s.contest = Filename.basename c.Bj.Contest.dir then Some s else None
@@ -91,7 +70,7 @@ let submissions c =
   List.sort (fun a b -> String.compare b.Bj.Sub.id a.id) (List.append (items "pending") (items "done"))
 
 let submission c id =
-  if not (id_ok id) then fail "404 Not Found" "Not found";
+  if not (Bj.Sub.id_ok id) then fail "404 Not Found" "Not found";
   let done_file = path (path (data ()) "done") id in
   let pending_file = path (path (data ()) "pending") id in
   let file = if Sys.file_exists done_file then done_file else pending_file in
@@ -100,7 +79,7 @@ let submission c id =
   let verdict = match s.result with
     | None -> "pending"
     | Some r -> Printf.sprintf "%s cpu=%d test=%d" r.verdict r.cpu r.test in
-  let ce = if s.result <> None && Sys.file_exists (done_file ^ ".ce") then read_file (done_file ^ ".ce") else "" in
+  let ce = if s.result <> None && Sys.file_exists (done_file ^ ".ce") then Bj.File.read (done_file ^ ".ce") else "" in
   (s, verdict, ce)
 
 let scoreboard c =
@@ -159,10 +138,11 @@ let get c tail =
           "<li>" ^ View.link (b ^ "/p/" ^ p.Bj.Contest.name) (p.name ^ ": " ^ p.title) ^ "</li>") c.problems in
           "<ul>" ^ String.concat "" problems ^ "</ul>" ^
           (if open_now c then "<p>Submissions are open.</p>" else "<p>Contest has ended.</p>") in
-      View.send "200 OK" markup (html c.title (navigation c ^ "<p>" ^ date c.start ^ " to " ^ date c.stop ^ "</p>" ^ body))
+      View.send "200 OK" markup (html c.title (navigation c ^ "<p>" ^ Bj.Contest.format_utc c.start ^
+        " UTC to " ^ Bj.Contest.format_utc c.stop ^ " UTC</p>" ^ body))
   | [ "p"; name ] when started c ->
       let p = problem c (segment name) in
-      let statement = read_file (path (path c.dir p.name) "statement.html") in
+      let statement = Bj.File.read (path (path c.dir p.name) "statement.html") in
       View.send "200 OK" markup (html p.title (navigation c ^ statement ^
         (if open_now c then submit_form c p.name else "")))
   | [ "submit" ] ->

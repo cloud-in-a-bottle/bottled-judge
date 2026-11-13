@@ -8,6 +8,17 @@ let id () =
   Random.self_init ();
   Printf.sprintf "%013d-%016Lx" (int_of_float (Unix.gettimeofday () *. 1000.)) (Random.bits64 ())
 
+let id_ok id =
+  String.length id = 30 && id.[13] = '-' &&
+  let rec check i =
+    if i = 30 then true
+    else if i = 13 then check (i + 1)
+    else let c = id.[i] in
+      if (i < 13 && c >= '0' && c <= '9') ||
+         (i > 13 && ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) then check (i + 1) else false
+  in
+  check 0
+
 let name_ok s =
   let n = String.length s in
   n >= 1 && n <= 32 && s.[0] <> ' ' && s.[n - 1] <> ' ' && String.for_all (fun c -> c >= ' ' && c <= '~') s

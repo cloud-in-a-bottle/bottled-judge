@@ -70,10 +70,6 @@ let execute tl ml i o d cmd =
   let v = if k || c > tl then "TLE" else if sz >= cap then "OLE" else if st <> WEXITED 0 || not (regular o) then "RE" else "OK" in
   (v, c, w, sz)
 
-let run tl ml i o d cmd =
-  let v, c, w, sz = execute tl ml i o d cmd in
-  Printf.printf "%s cpu=%d wall=%d out=%d\n" v c w sz
-
 let build x d =
   let cc = compiler x and e = Filename.concat d "ce" in
   if cc = [||] then (true, 0, 0, "")
@@ -87,10 +83,6 @@ let build x d =
       (not k && st = WEXITED 0, c, w, text)
     end
   end
-
-let compile x d =
-  let ok, c, w, text = build x d in
-  Printf.printf "%s cpu=%d wall=%d\n%s" (if ok then "OK" else "CE") c w text
 
 let data () = Sys.getenv "OPENHOST_APP_DATA_DIR"
 let temp () = Sys.getenv "OPENHOST_APP_TEMP_DIR"
@@ -137,26 +129,12 @@ let equal_files a b =
   | result -> close_in x; close_in y; result
   | exception ex -> close_in_noerr x; close_in_noerr y; raise ex
 
-let tests dir =
-  let entries = Array.to_list (Sys.readdir dir) in
-  let inputs = List.filter (fun s -> Filename.check_suffix s ".in") entries in
-  let numbers = List.map (fun s -> int_of_string (Filename.chop_suffix s ".in")) inputs in
-  let numbers = List.sort compare numbers in
-  if numbers = [] then failwith (dir ^ ": no tests");
-  List.iteri (fun i n ->
-    if n <> i + 1 || not (Sys.file_exists (path dir (string_of_int n ^ ".out"))) then
-      failwith (dir ^ ": missing test pair")) numbers;
-  List.iter (fun f ->
-    if Filename.check_suffix f ".out" && not (List.mem f (List.map (fun n -> string_of_int n ^ ".out") numbers)) then
-      failwith (dir ^ ": unmatched output")) entries;
-  numbers
-
 let judge_submission s =
   let contest_dir = path (path (data ()) "contests") s.Bj.Sub.contest in
   let contest = Bj.Contest.load contest_dir in
   let problem = List.find (fun p -> p.Bj.Contest.name = s.problem) contest.problems in
   let test_dir = path (path contest.dir problem.name) "tests" in
-  let cases = tests test_dir in
+  let cases = Bj.Test_set.numbers test_dir in
   let dir = prepare_sandbox () in
   let source = path dir (source_name s.lang) in
   write source s.source;
@@ -189,7 +167,7 @@ let access p uid gid mode =
 
 let secure_contests () =
   let root = path (data ()) "contests" in
-  access root 0 1000 0o750;
+  access root 0 1000 0o770;
   Array.iter (fun name ->
     let dir = path root name in
     if Sys.is_directory dir then begin
@@ -199,24 +177,8 @@ let secure_contests () =
         if Sys.is_directory p then begin
           access p 0 1000 0o750;
           let tests = path p "tests" in
-          if Sys.file_exists tests then access tests 0 0 0o700
+          if Sys.file_exists tests && (Unix.stat tests).st_perm <> 0o700 then Unix.chmod tests 0o700
         end) (Sys.readdir dir)
-    end) (Sys.readdir root)
-
-let publish_drafts () =
-  let root = Bj.Admin_data.drafts (data ()) in
-  Array.iter (fun id ->
-    let folder = path root id in
-    let marker = path folder ".publish" in
-    if (Unix.lstat folder).st_kind = Unix.S_DIR && Sys.file_exists marker then begin
-      try
-        ignore (Bj.Admin_data.validate (data ()) id);
-        Bj.Admin_data.ownership (data ()) id
-      with ex ->
-        (try Unix.unlink marker with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
-        let oc = open_out_bin (path folder ".error") in
-        output_string oc (Printexc.to_string ex);
-        close_out oc
     end) (Sys.readdir root)
 
 let finish id s result error =
@@ -248,7 +210,7 @@ let process id =
 
 let first_pending () =
   let files = Array.to_list (Sys.readdir (pending ())) in
-  let files = List.filter (fun f -> String.length f = 30 && f.[13] = '-') files in
+  let files = List.filter Bj.Sub.id_ok files in
   match List.sort compare files with [] -> None | id :: _ -> Some id
 
 let worker () =
@@ -261,7 +223,6 @@ let worker () =
   access (done_dir ()) 0 1000 0o750;
   ensure (temp ()) 0o755;
   let rec loop () =
-    publish_drafts ();
     secure_contests ();
     (match first_pending () with Some id -> process id | None -> Unix.sleepf 0.5);
     loop ()
@@ -287,9 +248,5 @@ let serve () =
   exit 1
 
 let () =
-  match Array.to_list Sys.argv with
-  | [ _ ] -> serve ()
-  | [ _; "compile"; x; d ] -> compile (Bj.Lang.of_string x) d
-  | _ :: "run" :: tl :: ml :: i :: o :: d :: "--" :: _ :: _ ->
-      run (int_of_string tl) (int_of_string ml) i o d (Array.sub Sys.argv 8 (Array.length Sys.argv - 8))
-  | _ -> prerr_endline "judge | judge compile LANG DIR | judge run TL_MS ML_MB IN OUT DIR -- CMD..."; exit 2
+  if Array.length Sys.argv <> 1 then (prerr_endline "judge takes no arguments"; exit 2);
+  serve ()

@@ -58,7 +58,7 @@ let replace folder archive_bytes =
         if String.length bytes <> entry.uncompressed_size || String.length bytes > 2097152 then
           failwith "Invalid test size";
         Bj.Admin_data.write (path staging name) bytes 0o600) entries);
-    ignore (Bj.Admin_data.tests staging);
+    ignore (Bj.Test_set.numbers staging);
     Unix.unlink archive;
     Sys.rename original backup;
     (try Sys.rename staging original with ex -> Sys.rename backup original; raise ex);

@@ -24,10 +24,7 @@ let write p contents mode =
 
 let date s =
   let stamp = Contest.time s in
-  let d = Unix.gmtime (float stamp) in
-  let actual = Printf.sprintf "%04d-%02d-%02d %02d:%02d"
-    (d.tm_year + 1900) (d.tm_mon + 1) d.tm_mday d.tm_hour d.tm_min in
-  if s <> actual then failwith "Use a real UTC date in YYYY-MM-DD HH:MM format";
+  if s <> Contest.format_utc stamp then failwith "Use a real UTC date in YYYY-MM-DD HH:MM format";
   stamp
 
 let title s =
@@ -36,24 +33,6 @@ let title s =
 
 let check_times start stop =
   if date start >= date stop then failwith "End must follow start"
-
-let tests p =
-  if not (directory p) then failwith "Missing tests directory";
-  let files = Array.to_list (Sys.readdir p) in
-  let visible = List.filter (fun name -> name.[0] <> '.') files in
-  let inputs = List.filter (fun name -> Filename.check_suffix name ".in") visible in
-  if inputs = [] || List.length visible <> List.length inputs * 2 then failwith "Each problem needs paired tests";
-  let numbers = List.sort compare (List.map (fun name ->
-    let number = Filename.chop_suffix name ".in" in
-    let n = int_of_string number in
-    if n < 1 || string_of_int n <> number then failwith "Invalid test number";
-    n) inputs) in
-  List.iteri (fun index n ->
-    if n <> index + 1 then failwith "Test numbers must start at 1 with no gaps";
-    let input = path p (string_of_int n ^ ".in") in
-    let output = path p (string_of_int n ^ ".out") in
-    if not (regular input && regular output) then failwith "Invalid test files") numbers;
-  List.length numbers
 
 let validate data id =
   let dir = draft data id in
@@ -79,34 +58,5 @@ let validate data id =
     let files = Array.to_list (Sys.readdir folder) in
     if List.sort compare files <> [ "problem.txt"; "statement.html"; "tests" ] then
       failwith "Unexpected problem files";
-    ignore (tests (path folder "tests"))) c.problems;
+    ignore (Test_set.numbers (path folder "tests"))) c.problems;
   c
-
-let ownership data id =
-  let root = draft data id in
-  let visible p uid gid mode =
-    if not (regular p) then failwith "Invalid published file";
-    Unix.chown p uid gid;
-    Unix.chmod p mode in
-  let dir p uid gid mode =
-    if not (directory p) then failwith "Invalid published directory";
-    Unix.chown p uid gid;
-    Unix.chmod p mode in
-  visible (path root "contest.txt") 0 1000 0o644;
-  Array.iter (fun name ->
-    let folder = path root name in
-    if name.[0] = '.' && name <> ".publish" && name <> ".error" then remove folder
-    else if directory folder then begin
-      visible (path folder "problem.txt") 0 1000 0o644;
-      visible (path folder "statement.html") 0 1000 0o644;
-      let cases = path folder "tests" in
-      Array.iter (fun file ->
-        let p = path cases file in
-        if file.[0] = '.' then Unix.unlink p else visible p 0 0 0o600) (Sys.readdir cases);
-      dir cases 0 0 0o700;
-      dir folder 0 1000 0o750
-    end) (Sys.readdir root);
-  Unix.unlink (path root ".publish");
-  (try Unix.unlink (path root ".error") with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
-  dir root 0 1000 0o750;
-  Sys.rename root (published data id)
