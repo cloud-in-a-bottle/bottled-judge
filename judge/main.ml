@@ -61,28 +61,210 @@ let sandbox l i o e d cmd =
   reap 50;
   (k, st, c, w)
 
-let run tl ml i o d cmd =
+let regular p =
+  try (Unix.lstat p).st_kind = Unix.S_REG with Unix.Unix_error (Unix.ENOENT, _, _) -> false
+
+let execute tl ml i o d cmd =
   let k, st, c, w = sandbox { cpu = tl; wall = max (2 * tl) (tl + 1000); mem = ml; nproc = 16; fsize = cap } i o "/dev/null" d cmd in
-  let sz = (Unix.stat o).st_size in
-  let v = if k || c > tl then "TLE" else if sz >= cap then "OLE" else if st <> WEXITED 0 then "RE" else "OK" in
+  let sz = if regular o then (Unix.stat o).st_size else 0 in
+  let v = if k || c > tl then "TLE" else if sz >= cap then "OLE" else if st <> WEXITED 0 || not (regular o) then "RE" else "OK" in
+  (v, c, w, sz)
+
+let run tl ml i o d cmd =
+  let v, c, w, sz = execute tl ml i o d cmd in
   Printf.printf "%s cpu=%d wall=%d out=%d\n" v c w sz
 
-let compile x d =
-  let cc = compiler x and e = d ^ "/ce" in
-  if cc = [||] then print_endline "OK cpu=0 wall=0"
+let build x d =
+  let cc = compiler x and e = Filename.concat d "ce" in
+  if cc = [||] then (true, 0, 0, "")
   else begin
     let k, st, c, w = sandbox { cpu = 30000; wall = 30000; mem = 2048; nproc = 64; fsize = 2 * cap } "/dev/null" "/dev/null" e d cc in
-    Printf.printf "%s cpu=%d wall=%d\n" (if k || st <> WEXITED 0 then "CE" else "OK") c w;
-    let ic = open_in_bin e in
-    print_string (really_input_string ic (min 16384 (in_channel_length ic)));
-    close_in ic
+    if not (regular e) then (false, c, w, "invalid compiler output")
+    else begin
+      let ic = open_in_bin e in
+      let text = really_input_string ic (min 16384 (in_channel_length ic)) in
+      close_in ic;
+      (not k && st = WEXITED 0, c, w, text)
+    end
   end
 
+let compile x d =
+  let ok, c, w, text = build x d in
+  Printf.printf "%s cpu=%d wall=%d\n%s" (if ok then "OK" else "CE") c w text
+
+let data () = Sys.getenv "OPENHOST_APP_DATA_DIR"
+let temp () = Sys.getenv "OPENHOST_APP_TEMP_DIR"
+let path a b = Filename.concat a b
+
+let ensure p mode =
+  if not (Sys.file_exists p) then Unix.mkdir p mode;
+  if not (Sys.is_directory p) then failwith (p ^ " is not a directory")
+
+let rec remove p =
+  if (Unix.lstat p).st_kind = Unix.S_DIR then begin
+    Array.iter (fun x -> remove (path p x)) (Sys.readdir p);
+    Unix.rmdir p
+  end else Unix.unlink p
+
+let write p text =
+  let tmp = path (Filename.dirname p) ("." ^ Filename.basename p) in
+  let oc = open_out_bin tmp in
+  output_string oc text;
+  flush oc;
+  Unix.fsync (Unix.descr_of_out_channel oc);
+  close_out oc;
+  Sys.rename tmp p
+
+let prepare_sandbox () =
+  let dir = path (temp ()) "sandbox" in
+  if Sys.file_exists dir then remove dir;
+  Unix.mkdir dir 0o700;
+  Unix.chown dir uid uid;
+  dir
+
+let source_name : Bj.Lang.t -> string = function
+  | C -> "main.c" | Cpp -> "main.cpp" | Rust -> "main.rs" | OCaml -> "main.ml" | Python -> "main.py"
+
+let equal_files a b =
+  let x = open_in_bin a and y = open_in_bin b in
+  let one = Bytes.create 65536 and two = Bytes.create 65536 in
+  let rec compare () =
+    let n = input x one 0 (Bytes.length one) in
+    let m = input y two 0 (Bytes.length two) in
+    n = m && (n = 0 || (Bytes.sub one 0 n = Bytes.sub two 0 m && compare ()))
+  in
+  match compare () with
+  | result -> close_in x; close_in y; result
+  | exception ex -> close_in_noerr x; close_in_noerr y; raise ex
+
+let tests dir =
+  let entries = Array.to_list (Sys.readdir dir) in
+  let inputs = List.filter (fun s -> Filename.check_suffix s ".in") entries in
+  let numbers = List.map (fun s -> int_of_string (Filename.chop_suffix s ".in")) inputs in
+  let numbers = List.sort compare numbers in
+  if numbers = [] then failwith (dir ^ ": no tests");
+  List.iteri (fun i n ->
+    if n <> i + 1 || not (Sys.file_exists (path dir (string_of_int n ^ ".out"))) then
+      failwith (dir ^ ": missing test pair")) numbers;
+  List.iter (fun f ->
+    if Filename.check_suffix f ".out" && not (List.mem f (List.map (fun n -> string_of_int n ^ ".out") numbers)) then
+      failwith (dir ^ ": unmatched output")) entries;
+  numbers
+
+let judge_submission s =
+  let contest_dir = path (path (data ()) "contests") s.Bj.Sub.contest in
+  let contest = Bj.Contest.load contest_dir in
+  let problem = List.find (fun p -> p.Bj.Contest.name = s.problem) contest.problems in
+  let test_dir = path (path contest.dir problem.name) "tests" in
+  let cases = tests test_dir in
+  let dir = prepare_sandbox () in
+  let source = path dir (source_name s.lang) in
+  write source s.source;
+  Unix.chown source uid uid;
+  let ok, _, _, error = build s.lang dir in
+  if not ok then ({ Bj.Sub.verdict = "CE"; test = 0; cpu = 0 }, Some error)
+  else begin
+    let rec check cpu = function
+      | [] -> ({ Bj.Sub.verdict = "AC"; test = 0; cpu }, None)
+      | n :: rest ->
+          let input = path test_dir (string_of_int n ^ ".in") in
+          let expected = path test_dir (string_of_int n ^ ".out") in
+          let output = path dir "out" in
+          (try remove output with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
+          let verdict, time, _, _ = execute problem.time problem.memory input output dir (program s.lang) in
+          let verdict = if verdict = "OK" then (if equal_files output expected then "AC" else "WA") else verdict in
+          let cpu = cpu + time in
+          if verdict = "AC" then check cpu rest else ({ Bj.Sub.verdict; test = n; cpu }, None)
+    in
+    check 0 cases
+  end
+
+let pending () = path (data ()) "pending"
+let done_dir () = path (data ()) "done"
+
+let access p uid gid mode =
+  let s = Unix.stat p in
+  if s.st_uid <> uid || s.st_gid <> gid then Unix.chown p uid gid;
+  if s.st_perm <> mode then Unix.chmod p mode
+
+let secure_contests () =
+  let root = path (data ()) "contests" in
+  access root 0 1000 0o750;
+  Array.iter (fun name ->
+    let dir = path root name in
+    if Sys.is_directory dir then begin
+      access dir 0 1000 0o750;
+      Array.iter (fun name ->
+        let p = path dir name in
+        if Sys.is_directory p then begin
+          access p 0 1000 0o750;
+          let tests = path p "tests" in
+          if Sys.file_exists tests then access tests 0 0 0o700
+        end) (Sys.readdir dir)
+    end) (Sys.readdir root)
+
+let finish id s result error =
+  let target = path (done_dir ()) id in
+  (match error with Some text -> write (target ^ ".ce") text
+  | None -> (try Unix.unlink (target ^ ".ce") with Unix.Unix_error (Unix.ENOENT, _, _) -> ()));
+  Bj.Sub.write target { s with result = Some result };
+  Unix.unlink (path (pending ()) id);
+  let dir = path (temp ()) "sandbox" in
+  if Sys.file_exists dir then remove dir
+
+let process id =
+  let file = path (pending ()) id in
+  if Sys.file_exists (path (done_dir ()) id) then Unix.unlink file
+  else begin
+    let s = Bj.Sub.read file in
+    if s.attempts >= 3 then finish id s { Bj.Sub.verdict = "IE"; test = 0; cpu = 0 } None
+    else begin
+      let s = { s with attempts = s.attempts + 1 } in
+      Bj.Sub.write file s;
+      let result, error =
+        try judge_submission s with ex ->
+          prerr_endline (Printexc.to_string ex);
+          ({ Bj.Sub.verdict = "IE"; test = 0; cpu = 0 }, None)
+      in
+      finish id s result error
+    end
+  end
+
+let first_pending () =
+  let files = Array.to_list (Sys.readdir (pending ())) in
+  let files = List.filter (fun f -> String.length f = 30 && f.[13] = '-') files in
+  match List.sort compare files with [] -> None | id :: _ -> Some id
+
+let worker () =
+  ensure (path (data ()) "contests") 0o755;
+  ensure (pending ()) 0o700;
+  access (pending ()) 1000 1000 0o700;
+  ensure (done_dir ()) 0o755;
+  access (done_dir ()) 0 1000 0o750;
+  ensure (temp ()) 0o755;
+  let rec loop () =
+    secure_contests ();
+    (match first_pending () with Some id -> process id | None -> Unix.sleepf 0.5);
+    loop ()
+  in
+  loop ()
+
 let serve () =
-  Sys.set_signal Sys.sigterm (Sys.Signal_handle (fun _ -> exit 0));
+  Sys.set_signal Sys.sigterm (Sys.Signal_handle (fun _ -> (try Unix.kill (-1) Sys.sigterm with _ -> ()); exit 0));
   let l = Unix.create_process "lighttpd" [| "lighttpd"; "-D"; "-f"; "/src/lighttpd.conf" |] Unix.stdin Unix.stdout Unix.stderr in
-  let rec loop () = if fst (Unix.wait ()) <> l then loop () in
+  let j = Unix.fork () in
+  if j = 0 then begin
+    Sys.set_signal Sys.sigterm Sys.Signal_default;
+    try worker () with ex -> prerr_endline (Printexc.to_string ex); exit 1
+  end;
+  let rec loop () =
+    let p, _ = Unix.wait () in
+    if p <> l && p <> j then loop ()
+  in
   loop ();
+  (try Unix.kill l Sys.sigterm with _ -> ());
+  (try Unix.kill j Sys.sigterm with _ -> ());
+  (try reap 50 with _ -> ());
   exit 1
 
 let () =
