@@ -7,6 +7,9 @@ description = "Competitive programming judge"
 image = "Containerfile"
 port = 8080
 
+[routing]
+public_paths = ["/c/"]
+
 [resources]
 memory_mb = 3072
 cpu_cores = 2
