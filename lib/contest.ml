@@ -17,7 +17,8 @@ let load dir =
   let h, _ = Kv.read (Filename.concat dir "contest.txt") in
   let token = Kv.get h "token" in
   if String.length token < 20 then failwith (dir ^ ": token too short");
-  let ps = List.filter (fun p -> Sys.is_directory (Filename.concat dir p)) (List.sort compare (Array.to_list (Sys.readdir dir))) in
+  let ps = List.filter (fun p -> p.[0] <> '.' && Sys.is_directory (Filename.concat dir p))
+    (List.sort compare (Array.to_list (Sys.readdir dir))) in
   { dir; title = Kv.get h "title"; token; start = time (Kv.get h "start"); stop = time (Kv.get h "end"); problems = List.map (problem dir) ps }
 
 let same a b =

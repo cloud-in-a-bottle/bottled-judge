@@ -203,6 +203,22 @@ let secure_contests () =
         end) (Sys.readdir dir)
     end) (Sys.readdir root)
 
+let publish_drafts () =
+  let root = Bj.Admin_data.drafts (data ()) in
+  Array.iter (fun id ->
+    let folder = path root id in
+    let marker = path folder ".publish" in
+    if (Unix.lstat folder).st_kind = Unix.S_DIR && Sys.file_exists marker then begin
+      try
+        ignore (Bj.Admin_data.validate (data ()) id);
+        Bj.Admin_data.ownership (data ()) id
+      with ex ->
+        (try Unix.unlink marker with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
+        let oc = open_out_bin (path folder ".error") in
+        output_string oc (Printexc.to_string ex);
+        close_out oc
+    end) (Sys.readdir root)
+
 let finish id s result error =
   let target = path (done_dir ()) id in
   (match error with Some text -> write (target ^ ".ce") text
@@ -237,12 +253,15 @@ let first_pending () =
 
 let worker () =
   ensure (path (data ()) "contests") 0o755;
+  ensure (Bj.Admin_data.drafts (data ())) 0o700;
+  access (Bj.Admin_data.drafts (data ())) 1000 1000 0o700;
   ensure (pending ()) 0o700;
   access (pending ()) 1000 1000 0o700;
   ensure (done_dir ()) 0o755;
   access (done_dir ()) 0 1000 0o750;
   ensure (temp ()) 0o755;
   let rec loop () =
+    publish_drafts ();
     secure_contests ();
     (match first_pending () with Some id -> process id | None -> Unix.sleepf 0.5);
     loop ()

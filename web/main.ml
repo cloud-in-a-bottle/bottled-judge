@@ -220,6 +220,7 @@ let route () =
   let uri = match String.index_opt uri '?' with None -> uri | Some i -> String.sub uri 0 i in
   let parts = String.split_on_char '/' uri in
   match parts with
+  | "" :: "admin" :: tail -> Admin.handle (if tail = [ "" ] then [] else tail)
   | "" :: "c" :: token :: tail when valid token ->
       let c = contest token in
       let tail = if tail = [ "" ] then [] else tail in
@@ -231,6 +232,7 @@ let route () =
 
 let () =
   try route () with
+  | Admin.Http (status, message) -> error status message
   | Http (status, message) -> error status message
   | Invalid_argument message -> error "400 Bad Request" message
   | ex -> prerr_endline (Printexc.to_string ex); error "500 Internal Server Error" "Internal error"

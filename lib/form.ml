@@ -30,7 +30,8 @@ let field header =
           (match List.filter_map (fun a ->
             if String.starts_with ~prefix:"name=\"" a && String.ends_with ~suffix:"\"" a then
               Some (slice a 6 (String.length a - 1)) else None) attrs with
-          | [ name ] when List.mem name [ "name"; "problem"; "lang"; "source"; "file" ] -> name
+          | [ name ] when List.mem name [ "name"; "problem"; "lang"; "source"; "file";
+            "title"; "start"; "end"; "time"; "memory"; "statement"; "input"; "output" ] -> name
           | _ -> bad ())
       | _ -> bad ())
   | _ -> bad ()
@@ -81,9 +82,9 @@ let parse content_type body =
   in
   parts (String.length start) []
 
-let read content_type length =
+let read ?(limit = 131072) content_type length =
   let n = try int_of_string length with _ -> bad () in
-  if n < 0 || n > 131072 then invalid_arg "request too large";
+  if n < 0 || n > limit then invalid_arg "request too large";
   set_binary_mode_in stdin true;
   let body = try really_input_string stdin n with End_of_file -> bad () in
   parse content_type body
