@@ -1,19 +1,16 @@
 let cap = 64 * 1024 * 1024
 let uid = 20000
 
-type lang = C | Cpp | Rust | OCaml | Python
 type lim = { cpu : int; wall : int; mem : int; nproc : int; fsize : int }
 
-let lang = function "c" -> C | "cpp" -> Cpp | "rs" -> Rust | "ml" -> OCaml | "py" -> Python | x -> failwith x
-
-let compiler = function
+let compiler : Bj.Lang.t -> string array = function
   | C -> [| "gcc"; "-std=c23"; "-O2"; "-o"; "main"; "main.c"; "-lm" |]
   | Cpp -> [| "g++"; "-std=c++23"; "-O2"; "-o"; "main"; "main.cpp" |]
   | Rust -> [| "rustc"; "--edition=2024"; "-O"; "-o"; "main"; "main.rs" |]
   | OCaml -> [| "ocamlopt"; "-o"; "main"; "main.ml" |]
   | Python -> [||]
 
-let program = function Python -> [| "python3"; "main.py" |] | _ -> [| "./main" |]
+let program : Bj.Lang.t -> string array = function Python -> [| "python3"; "main.py" |] | _ -> [| "./main" |]
 
 let mine p = p.[0] >= '0' && p.[0] <= '9' && (try (Unix.stat ("/proc/" ^ p)).st_uid = uid with _ -> false)
 
@@ -91,7 +88,7 @@ let serve () =
 let () =
   match Array.to_list Sys.argv with
   | [ _ ] -> serve ()
-  | [ _; "compile"; x; d ] -> compile (lang x) d
+  | [ _; "compile"; x; d ] -> compile (Bj.Lang.of_string x) d
   | _ :: "run" :: tl :: ml :: i :: o :: d :: "--" :: _ :: _ ->
       run (int_of_string tl) (int_of_string ml) i o d (Array.sub Sys.argv 8 (Array.length Sys.argv - 8))
   | _ -> prerr_endline "judge | judge compile LANG DIR | judge run TL_MS ML_MB IN OUT DIR -- CMD..."; exit 2

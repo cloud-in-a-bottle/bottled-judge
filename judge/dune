@@ -1,4 +1,4 @@
 (executable
  (name main)
  (public_name judge)
- (libraries unix))
+ (libraries unix bj))
