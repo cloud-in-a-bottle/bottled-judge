@@ -15,6 +15,10 @@ let page ?(headers = []) title body =
 let redirect target = View.send ~headers:[ "Location", target ] "303 See Other" "text/html; charset=utf-8" ""
 
 let id_ok id =
+  String.length id > 0 && String.length id <= 64 &&
+  String.for_all (function 'a'..'z' | 'A'..'Z' | '0'..'9' | '-' | '_' -> true | _ -> false) id
+
+let submission_id_ok id =
   String.length id = 30 && id.[13] = '-' &&
   let rec check i =
     if i = 30 then true
@@ -280,7 +284,7 @@ let published_page id dir =
   let entries kind =
     let folder = path (data ()) kind in
     List.filter_map (fun file ->
-      if not (id_ok file) then None else try
+      if not (submission_id_ok file) then None else try
         let s = Bj.Sub.read (path folder file) in
         if s.contest = id then Some s else None
       with _ -> None) (Array.to_list (Sys.readdir folder)) in
@@ -301,7 +305,7 @@ let published_page id dir =
     String.concat "" rows ^ "</table>")
 
 let view_submission id sid =
-  if not (id_ok sid) then fail "404 Not Found" "Unknown submission";
+  if not (submission_id_ok sid) then fail "404 Not Found" "Unknown submission";
   let folders = [ path (data ()) "done"; path (data ()) "pending" ] in
   let file = match List.find_opt (fun dir -> Sys.file_exists (path dir sid)) folders with
     | Some dir -> path dir sid
