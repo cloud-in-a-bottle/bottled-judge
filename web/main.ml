@@ -10,16 +10,10 @@ let valid s = String.length s > 0 && String.for_all (function
 let segment s = if not (valid s) then fail "404 Not Found" "Not found" else s
 let base token = "/c/" ^ token
 let html title body = View.page title body
-let text = "text/plain; charset=utf-8"
 let markup = "text/html; charset=utf-8"
 
-let plain () =
-  List.exists (fun value -> String.starts_with ~prefix:"text/plain" (String.trim value))
-    (String.split_on_char ',' (String.lowercase_ascii (env "HTTP_ACCEPT")))
-
 let error status message =
-  if plain () then View.send status text (message ^ "\n")
-  else View.send status markup (html "Error" ("<p>" ^ View.escape message ^ "</p>"))
+  View.send status markup (html "Error" ("<p>" ^ View.escape message ^ "</p>"))
 
 let contest token =
   let root = path (data ()) "contests" in
@@ -46,8 +40,7 @@ let navigation c =
   let b = base c.Bj.Contest.token in
   "<nav>" ^ View.link b "Problems" ^ " | " ^ View.link (b ^ "/submit") "Submit" ^
   " | " ^ View.link (b ^ "/submissions") "My submissions" ^
-  " | " ^ View.link (b ^ "/scoreboard") "Scoreboard" ^
-  " | " ^ View.link (b ^ "/submit.sh") "Command-line submitter" ^ "</nav>"
+  " | " ^ View.link (b ^ "/scoreboard") "Scoreboard" ^ "</nav>"
 
 let receive_name () =
   match View.name_cookie () with
@@ -133,26 +126,6 @@ let scoreboard c =
   "<table><thead><tr><th>Rank</th><th>Name</th><th>Solved</th><th>Problems</th></tr></thead><tbody>" ^
   render 1 (-1) 0 rows ^ "</tbody></table>"
 
-let script c =
-  let host = env "HTTP_X_FORWARDED_HOST" in
-  let host = if host = "" then env "HTTP_HOST" else host in
-  if host = "" || not (String.for_all (function 'a'..'z' | 'A'..'Z' | '0'..'9' | '.' | '-' | ':' -> true | _ -> false) host) then
-    fail "400 Bad Request" "Invalid host";
-  let scheme = if env "HTTP_X_FORWARDED_PROTO" = "https" then "https" else "http" in
-  let url = scheme ^ "://" ^ host ^ base c.Bj.Contest.token in
-  "#!/bin/sh\nset -eu\n" ^
-  "URL='" ^ url ^ "'\n" ^
-  "NAME=${JUDGE_NAME:?set JUDGE_NAME to your name}\n" ^
-  "[ $# -eq 2 ] || { echo 'usage: submit PROBLEM FILE' >&2; exit 2; }\n" ^
-  "case $2 in\n" ^
-  "  *.c) lang=c ;;\n  *.cpp|*.cc) lang=cpp ;;\n  *.py) lang=py ;;\n  *.rs) lang=rs ;;\n  *.ml) lang=ml ;;\n" ^
-  "  *) echo 'unknown file extension' >&2; exit 2 ;;\nesac\n" ^
-  "id=$(curl -fsS -H 'Accept: text/plain' --form-string \"name=$NAME\" --form-string \"problem=$1\" --form-string \"lang=$lang\" -F \"file=@$2\" \"$URL/submit\")\n" ^
-  "echo \"submitted $id\"\n" ^
-  "while :; do\n  result=$(curl -fsS -H 'Accept: text/plain' \"$URL/s/$id\")\n" ^
-  "  case $result in\n    pending) sleep 2 ;;\n    AC*) printf '%s\\n' \"$result\"; exit 0 ;;\n" ^
-  "    *) printf '%s\\n' \"$result\"; exit 1 ;;\n  esac\ndone\n"
-
 let post c =
   if not (open_now c) then fail "403 Forbidden" "Contest is not accepting submissions";
   let fields = try Bj.Form.read (env "CONTENT_TYPE") (env "CONTENT_LENGTH") with
@@ -173,8 +146,7 @@ let post c =
   let dir = path (data ()) "pending" in
   Bj.Sub.write (path dir ("." ^ id)) s;
   Sys.rename (path dir ("." ^ id)) (path dir id);
-  if plain () then View.send "201 Created" text (id ^ "\n")
-  else View.send ~headers:[ "Location", base c.token ^ "/s/" ^ id;
+  View.send ~headers:[ "Location", base c.token ^ "/s/" ^ id;
     "Set-Cookie", View.cookie c.token name (env "HTTP_X_FORWARDED_PROTO" = "https") ]
     "303 See Other" markup ""
 
@@ -196,11 +168,9 @@ let get c tail =
   | [ "submit" ] ->
       if not (open_now c) then fail "403 Forbidden" "Contest is not accepting submissions";
       View.send "200 OK" markup (html "Submit" (navigation c ^ submit_form c ""))
-  | [ "submit.sh" ] -> View.send "200 OK" "text/x-shellscript; charset=utf-8" (script c)
   | [ "s"; id ] ->
       let s, verdict, ce = submission c id in
-      if plain () then View.send "200 OK" text (verdict ^ "\n" ^ ce)
-      else View.send ~headers:(if s.result = None then [ "Refresh", "3" ] else []) "200 OK" markup
+      View.send ~headers:(if s.result = None then [ "Refresh", "3" ] else []) "200 OK" markup
         (html "Submission" (navigation c ^ "<p>" ^ View.escape (s.name ^ " / " ^ s.problem ^ " / " ^ verdict) ^ "</p>" ^
           (if ce = "" then "" else "<pre>" ^ View.escape ce ^ "</pre>")))
   | [ "submissions" ] ->
