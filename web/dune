@@ -1,4 +1,4 @@
 (executable
  (name main)
  (public_name web)
- (libraries unix bj))
+ (libraries unix bj zip))

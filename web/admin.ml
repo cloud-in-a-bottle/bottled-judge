@@ -132,9 +132,8 @@ let test_numbers dir =
 
 let test_form action =
   "<form method=\"post\" enctype=\"multipart/form-data\" action=\"" ^ escape action ^ "\">" ^
-  "<p><label>Input <input name=\"input\" type=\"file\" required></label></p>" ^
-  "<p><label>Expected output <input name=\"output\" type=\"file\" required></label></p>" ^
-  "<button>Add test pair</button></form>"
+  "<p><label>Tests ZIP <input name=\"archive\" type=\"file\" accept=\".zip,application/zip\" required></label></p>" ^
+  "<button>Replace all tests</button></form>"
 
 let post_button action label =
   "<form method=\"post\" action=\"" ^ escape action ^ "\"><button>" ^ escape label ^ "</button></form>"
@@ -202,16 +201,15 @@ let draft_problem id name =
   close_in ic;
   let base = "/" ^ id ^ "/p/" ^ name in
   let tests = path folder "tests" in
-  let files = List.map (fun n ->
-    let input = path tests (string_of_int n ^ ".in") in
-    let output = path tests (string_of_int n ^ ".out") in
-    "<li>Test " ^ string_of_int n ^ " (input " ^
-    (if Sys.file_exists input then string_of_int (Unix.stat input).st_size ^ " bytes" else "missing") ^
-    ", output " ^ (if Sys.file_exists output then string_of_int (Unix.stat output).st_size ^ " bytes" else "missing") ^
-    ") " ^ post_button (base ^ "/tests/" ^ string_of_int n ^ "/delete") "Delete" ^ "</li>") (test_numbers tests) in
+  let count = List.length (test_numbers tests) in
   page (Bj.Kv.get h "title") ("<p>" ^ link ("/" ^ id) "Back to draft" ^ "</p>" ^
     problem_form base (Bj.Kv.get h "title") (Bj.Kv.get h "time") (Bj.Kv.get h "memory") statement "Save" ^
-    "<h2>Preview</h2>" ^ statement ^ "<h2>Hidden tests</h2><ol>" ^ String.concat "" files ^ "</ol>" ^
+    "<h2>Preview</h2>" ^ statement ^ "<h2>Hidden tests</h2><p>" ^
+    string_of_int count ^ (if count = 1 then " test pair" else " test pairs") ^ " uploaded.</p>" ^
+    "<p>ZIP this exact directory layout, with no surrounding folder:</p>" ^
+    "<pre>tests/\n├── 1.in\n├── 1.out\n├── 2.in\n└── 2.out</pre>" ^
+    "<p>Tests must be consecutive .in/.out pairs. Uploading a ZIP replaces the entire draft test set. " ^
+    "Maximum ZIP size: 4 MiB; each file: 2 MiB.</p>" ^
     test_form (base ^ "/tests") ^ post_button (base ^ "/delete") "Delete problem")
 
 let add_problem id =
@@ -236,30 +234,14 @@ let edit_problem id name =
   save_problem folder title time memory statement;
   redirect ("/" ^ id ^ "/p/" ^ name)
 
-let add_test id name =
+let replace_tests id name =
   let dir = editable id in
   let folder = load_problem dir name in
   let fields = form ~limit:4194304 () in
-  let input = get fields "input" and output = get fields "output" in
-  if String.length input > 2097152 || String.length output > 2097152 then bad "Each test file is limited to 2 MiB";
-  let tests = path folder "tests" in
-  let rec choose n =
-    if Sys.file_exists (path tests (string_of_int n ^ ".in")) ||
-       Sys.file_exists (path tests (string_of_int n ^ ".out")) then choose (n + 1) else n in
-  let n = choose 1 in
-  Bj.Admin_data.write (path tests (string_of_int n ^ ".in")) input 0o600;
-  Bj.Admin_data.write (path tests (string_of_int n ^ ".out")) output 0o600;
-  redirect ("/" ^ id ^ "/p/" ^ name)
-
-let delete_test id name number =
-  let dir = editable id in
-  let tests = path (load_problem dir name) "tests" in
-  let n = match int_of_string_opt number with
-    | Some n when n > 0 && string_of_int n = number -> n
-    | _ -> fail "404 Not Found" "Unknown test" in
-  List.iter (fun extension ->
-    let file = path tests (string_of_int n ^ extension) in
-    if Sys.file_exists file then Unix.unlink file) [ ".in"; ".out" ];
+  (try Test_archive.replace folder (get fields "archive") with
+  | Failure message -> bad message
+  | Zip.Error (_, _, message) -> bad ("Invalid ZIP: " ^ message)
+  | End_of_file -> bad "Invalid ZIP");
   redirect ("/" ^ id ^ "/p/" ^ name)
 
 let delete_problem id name =
@@ -344,8 +326,7 @@ let handle parts =
   | "POST", [ id; "p" ] -> add_problem id
   | "GET", [ id; "p"; name ] -> draft_problem id (letter name)
   | "POST", [ id; "p"; name ] -> edit_problem id (letter name)
-  | "POST", [ id; "p"; name; "tests" ] -> add_test id (letter name)
-  | "POST", [ id; "p"; name; "tests"; number; "delete" ] -> delete_test id (letter name) number
+  | "POST", [ id; "p"; name; "tests" ] -> replace_tests id (letter name)
   | "POST", [ id; "p"; name; "delete" ] -> delete_problem id (letter name)
   | "POST", [ id; "publish" ] -> publish id
   | "POST", [ id; "delete" ] -> delete_draft id
