@@ -10,7 +10,7 @@ let link = View.link
 
 let page ?(headers = []) title body =
   View.send ~headers "200 OK" "text/html; charset=utf-8"
-    (View.page title ("<nav>" ^ link "/admin" "Admin" ^ "</nav>" ^ body))
+    (View.page title ("<nav>" ^ link "/" "Contests" ^ "</nav>" ^ body))
 
 let redirect target = View.send ~headers:[ "Location", target ] "303 See Other" "text/html; charset=utf-8" ""
 
@@ -145,10 +145,10 @@ let list_contests () =
     List.filter_map (fun id ->
       try
         let c = Bj.Contest.load (path dir id) in
-        Some ("<li>" ^ link ("/admin/" ^ id) c.title ^ " (" ^ status ^ ", " ^
+        Some ("<li>" ^ link ("/" ^ id) c.title ^ " (" ^ status ^ ", " ^
           string_of_int (List.length c.problems) ^ " problems)</li>")
       with _ -> None) ids in
-  page "Contests" ("<p>" ^ link "/admin/new" "Create contest" ^ "</p>" ^
+  page "Contests" ("<p>" ^ link "/new" "Create contest" ^ "</p>" ^
     "<ul>" ^ String.concat "" (List.append
       (rows (Bj.Admin_data.drafts (data ())) "draft")
       (rows (Bj.Admin_data.contests (data ())) "published")) ^ "</ul>")
@@ -160,7 +160,7 @@ let new_contest () =
   let dir = Bj.Admin_data.draft (data ()) id in
   Unix.mkdir dir 0o700;
   contest_file dir title (token ()) start stop;
-  redirect ("/admin/" ^ id)
+  redirect ("/" ^ id)
 
 let update_contest id =
   let dir = editable id in
@@ -168,11 +168,11 @@ let update_contest id =
   future start;
   let c = Bj.Contest.load dir in
   contest_file dir title c.token start stop;
-  redirect ("/admin/" ^ id)
+  redirect ("/" ^ id)
 
 let draft_page id dir =
   let c = Bj.Contest.load dir in
-  let base = "/admin/" ^ id in
+  let base = "/" ^ id in
   let busy = Sys.file_exists (path dir ".publish") in
   let error = path dir ".error" in
   let message = if Sys.file_exists error then
@@ -200,7 +200,7 @@ let draft_problem id name =
   let ic = open_in_bin (path folder "statement.html") in
   let statement = really_input_string ic (in_channel_length ic) in
   close_in ic;
-  let base = "/admin/" ^ id ^ "/p/" ^ name in
+  let base = "/" ^ id ^ "/p/" ^ name in
   let tests = path folder "tests" in
   let files = List.map (fun n ->
     let input = path tests (string_of_int n ^ ".in") in
@@ -209,7 +209,7 @@ let draft_problem id name =
     (if Sys.file_exists input then string_of_int (Unix.stat input).st_size ^ " bytes" else "missing") ^
     ", output " ^ (if Sys.file_exists output then string_of_int (Unix.stat output).st_size ^ " bytes" else "missing") ^
     ") " ^ post_button (base ^ "/tests/" ^ string_of_int n ^ "/delete") "Delete" ^ "</li>") (test_numbers tests) in
-  page (Bj.Kv.get h "title") ("<p>" ^ link ("/admin/" ^ id) "Back to draft" ^ "</p>" ^
+  page (Bj.Kv.get h "title") ("<p>" ^ link ("/" ^ id) "Back to draft" ^ "</p>" ^
     problem_form base (Bj.Kv.get h "title") (Bj.Kv.get h "time") (Bj.Kv.get h "memory") statement "Save" ^
     "<h2>Preview</h2>" ^ statement ^ "<h2>Hidden tests</h2><ol>" ^ String.concat "" files ^ "</ol>" ^
     test_form (base ^ "/tests") ^ post_button (base ^ "/delete") "Delete problem")
@@ -227,14 +227,14 @@ let add_problem id =
   Unix.mkdir (path staging "tests") 0o700;
   save_problem staging title time memory statement;
   Sys.rename staging (path dir name);
-  redirect ("/admin/" ^ id ^ "/p/" ^ name)
+  redirect ("/" ^ id ^ "/p/" ^ name)
 
 let edit_problem id name =
   let dir = editable id in
   let folder = load_problem dir name in
   let title, time, memory, statement = problem_fields (form ()) in
   save_problem folder title time memory statement;
-  redirect ("/admin/" ^ id ^ "/p/" ^ name)
+  redirect ("/" ^ id ^ "/p/" ^ name)
 
 let add_test id name =
   let dir = editable id in
@@ -249,7 +249,7 @@ let add_test id name =
   let n = choose 1 in
   Bj.Admin_data.write (path tests (string_of_int n ^ ".in")) input 0o600;
   Bj.Admin_data.write (path tests (string_of_int n ^ ".out")) output 0o600;
-  redirect ("/admin/" ^ id ^ "/p/" ^ name)
+  redirect ("/" ^ id ^ "/p/" ^ name)
 
 let delete_test id name number =
   let dir = editable id in
@@ -260,12 +260,12 @@ let delete_test id name number =
   List.iter (fun extension ->
     let file = path tests (string_of_int n ^ extension) in
     if Sys.file_exists file then Unix.unlink file) [ ".in"; ".out" ];
-  redirect ("/admin/" ^ id ^ "/p/" ^ name)
+  redirect ("/" ^ id ^ "/p/" ^ name)
 
 let delete_problem id name =
   let dir = editable id in
   Bj.Admin_data.remove (load_problem dir name);
-  redirect ("/admin/" ^ id)
+  redirect ("/" ^ id)
 
 let publish id =
   let dir = editable id in
@@ -273,11 +273,11 @@ let publish id =
   | Failure message -> bad message
   | ex -> bad (Printexc.to_string ex));
   Bj.Admin_data.write (path dir ".publish") "" 0o600;
-  redirect ("/admin/" ^ id)
+  redirect ("/" ^ id)
 
 let delete_draft id =
   Bj.Admin_data.remove (editable id);
-  redirect "/admin"
+  redirect "/"
 
 let published_page id dir =
   let c = Bj.Contest.load dir in
@@ -293,7 +293,7 @@ let published_page id dir =
   let recent = List.filteri (fun i _ -> i < 50) all in
   let rows = List.map (fun (s : Bj.Sub.t) ->
     let status = match s.result with None -> "pending" | Some r -> r.verdict in
-    "<tr><td>" ^ link ("/admin/" ^ id ^ "/s/" ^ s.id) s.id ^ "</td><td>" ^ escape s.name ^
+    "<tr><td>" ^ link ("/" ^ id ^ "/s/" ^ s.id) s.id ^ "</td><td>" ^ escape s.name ^
     "</td><td>" ^ escape s.problem ^ "</td><td>" ^ escape status ^ "</td></tr>") recent in
   let problems = List.map (fun p -> "<li>" ^ escape (p.Bj.Contest.name ^ ": " ^ p.title) ^ "</li>") c.problems in
   page c.title ("<p>Contest link: " ^ link ("/c/" ^ c.token) ("/c/" ^ c.token) ^ "</p>" ^
@@ -320,7 +320,7 @@ let view_submission id sid =
     let text = really_input_string ic (in_channel_length ic) in
     close_in ic;
     "<h2>Compiler output</h2><pre>" ^ escape text ^ "</pre>" else "" in
-  page "Submission" ("<p>" ^ link ("/admin/" ^ id) "Back to contest" ^ "</p>" ^
+  page "Submission" ("<p>" ^ link ("/" ^ id) "Back to contest" ^ "</p>" ^
     "<p>" ^ escape (s.name ^ " / " ^ s.problem ^ " / " ^ result) ^ "</p>" ^
     "<h2>Source</h2><pre>" ^ escape s.source ^ "</pre>" ^ error)
 
@@ -336,7 +336,8 @@ let handle parts =
   if env "HTTP_X_OPENHOST_IS_OWNER" <> "true" then fail "403 Forbidden" "Owner access required";
   match env "REQUEST_METHOD", parts with
   | "GET", [] -> list_contests ()
-  | "GET", [ "new" ] -> page "New contest" (contest_form "/admin/new" "" (next_time 60) (next_time 240) "Create")
+  | "GET", [ "admin" ] -> redirect "/"
+  | "GET", [ "new" ] -> page "New contest" (contest_form "/new" "" (next_time 60) (next_time 240) "Create")
   | "POST", [ "new" ] -> new_contest ()
   | "GET", [ id ] -> view_contest id
   | "POST", [ id ] -> update_contest id

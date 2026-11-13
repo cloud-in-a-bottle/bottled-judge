@@ -220,14 +220,14 @@ let route () =
   let uri = match String.index_opt uri '?' with None -> uri | Some i -> String.sub uri 0 i in
   let parts = String.split_on_char '/' uri in
   match parts with
-  | "" :: "admin" :: tail -> Admin.handle (if tail = [ "" ] then [] else tail)
   | "" :: "c" :: token :: tail when valid token ->
       let c = contest token in
       let tail = if tail = [ "" ] then [] else tail in
       (match env "REQUEST_METHOD", tail with
       | "GET", _ -> get c tail
-      | "POST", [ "submit" ] -> post c
-      | _ -> fail "405 Method Not Allowed" "Method not allowed")
+       | "POST", [ "submit" ] -> post c
+       | _ -> fail "405 Method Not Allowed" "Method not allowed")
+  | "" :: tail -> Admin.handle (if tail = [ "" ] then [] else tail)
   | _ -> fail "404 Not Found" "Not found"
 
 let () =
