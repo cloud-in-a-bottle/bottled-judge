@@ -1,0 +1,17 @@
+bottled-judge
+=============
+
+Owner-defined contests have problems, hidden tests, limits and hacking
+phases. Hacks target one submission. Contestant labels are unauthenticated.
+
+The judge runs on Debian 13 with Python 3.13.5, OCaml 5.3,
+GCC/g++ 14.2 (C23/C++23) and Rust 1.85 (edition 2024).
+Only image packages are available. Dependencies cannot be downloaded.
+
+Per-test CPU limits are 100-10000 ms and memory settings are 32-1024 MB.
+Runs also have a wall timeout and 64 MiB output limit. Builds have
+separate 30 s and 2 GiB limits. Submissions run unprivileged without
+network access, with process limits and cleanup. This setup is for
+semi-trusted users only. Do not run untrusted code without stronger isolation.
+
+AGPLv3. See LICENSE.
