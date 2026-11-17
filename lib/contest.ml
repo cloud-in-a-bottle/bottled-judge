@@ -1,5 +1,14 @@
 type problem = { name : string; title : string; time : int; memory : int }
-type t = { dir : string; title : string; token : string; start : int; stop : int; problems : problem list }
+type phase = Ready | Running | Stopped
+type t = { dir : string; title : string; token : string; phase : phase; problems : problem list }
+
+let phase_of_string = function
+  | "ready" -> Ready
+  | "running" -> Running
+  | "stopped" -> Stopped
+  | value -> failwith ("Invalid contest phase: " ^ value)
+
+let string_of_phase = function Ready -> "ready" | Running -> "running" | Stopped -> "stopped"
 
 let days y m d =
   let y = if m <= 2 then y - 1 else y in
@@ -8,10 +17,6 @@ let days y m d =
   (y / 400 * 146097) + (yoe * 365) + (yoe / 4) - (yoe / 100) + doy - 719468
 
 let time s = Scanf.sscanf s "%d-%d-%d %d:%d%!" (fun y m d h mi -> (days y m d * 86400) + (h * 3600) + (mi * 60))
-
-let format_utc stamp =
-  let t = Unix.gmtime (float stamp) in
-  Printf.sprintf "%04d-%02d-%02d %02d:%02d" (t.tm_year + 1900) (t.tm_mon + 1) t.tm_mday t.tm_hour t.tm_min
 
 let problem dir name =
   let h, _ = Kv.read (Filename.concat (Filename.concat dir name) "problem.txt") in
@@ -23,7 +28,30 @@ let load dir =
   if String.length token < 20 then failwith (dir ^ ": token too short");
   let ps = List.filter (fun p -> p.[0] <> '.' && Sys.is_directory (Filename.concat dir p))
     (List.sort compare (Array.to_list (Sys.readdir dir))) in
-  { dir; title = Kv.get h "title"; token; start = time (Kv.get h "start"); stop = time (Kv.get h "end"); problems = List.map (problem dir) ps }
+  { dir; title = Kv.get h "title"; token; phase = phase_of_string (Kv.get h "phase"); problems = List.map (problem dir) ps }
+
+let set_phase dir phase =
+  let file = Filename.concat dir "contest.txt" in
+  let h, body = Kv.read file in
+  let h = List.filter (fun (name, _) -> name <> "phase") h in
+  Kv.write file (List.append h [ "phase", string_of_phase phase ]) body
+
+let migrate dir draft =
+  let file = Filename.concat dir "contest.txt" in
+  let h, _ = Kv.read file in
+  if not (List.mem_assoc "phase" h) then begin
+    let phase = if draft then Ready else
+      let start = time (Kv.get h "start") and stop = time (Kv.get h "end") in
+      let now = int_of_float (Unix.gettimeofday ()) in
+      if now < start then Ready else if now < stop then Running else Stopped in
+    set_phase dir phase
+  end
+
+let with_lock dir f =
+  let fd = Unix.openfile (Filename.concat dir ".phase.lock") [ Unix.O_CREAT; Unix.O_RDWR ] 0o600 in
+  Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+    Unix.lockf fd Unix.F_LOCK 0;
+    f ())
 
 let same a b =
   let n = String.length a in

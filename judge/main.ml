@@ -171,7 +171,7 @@ let secure_contests () =
   Array.iter (fun name ->
     let dir = path root name in
     if Sys.is_directory dir then begin
-      access dir 0 1000 0o750;
+      access dir 0 1000 0o770;
       Array.iter (fun name ->
         let p = path dir name in
         if Sys.is_directory p then begin
@@ -214,6 +214,14 @@ let first_pending () =
   match List.sort compare files with [] -> None | id :: _ -> Some id
 
 let worker () =
+  let rec loop () =
+    secure_contests ();
+    (match first_pending () with Some id -> process id | None -> Unix.sleepf 0.5);
+    loop ()
+  in
+  loop ()
+
+let prepare () =
   ensure (path (data ()) "contests") 0o755;
   ensure (Bj.Admin_data.drafts (data ())) 0o700;
   access (Bj.Admin_data.drafts (data ())) 1000 1000 0o700;
@@ -222,14 +230,17 @@ let worker () =
   ensure (done_dir ()) 0o755;
   access (done_dir ()) 0 1000 0o750;
   ensure (temp ()) 0o755;
-  let rec loop () =
-    secure_contests ();
-    (match first_pending () with Some id -> process id | None -> Unix.sleepf 0.5);
-    loop ()
-  in
-  loop ()
+  secure_contests ();
+  let migrate parent is_draft =
+    Array.iter (fun name ->
+      let dir = path parent name in
+      if name.[0] <> '.' && Sys.is_directory dir && Sys.file_exists (path dir "contest.txt") then
+        Bj.Contest.migrate dir is_draft) (Sys.readdir parent) in
+  migrate (path (data ()) "contests") false;
+  migrate (Bj.Admin_data.drafts (data ())) true
 
 let serve () =
+  prepare ();
   Sys.set_signal Sys.sigterm (Sys.Signal_handle (fun _ -> (try Unix.kill (-1) Sys.sigterm with _ -> ()); exit 0));
   let l = Unix.create_process "lighttpd" [| "lighttpd"; "-D"; "-f"; "/src/lighttpd.conf" |] Unix.stdin Unix.stdout Unix.stderr in
   let j = Unix.fork () in

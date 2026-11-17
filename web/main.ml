@@ -21,12 +21,6 @@ let contest token =
   | None -> fail "404 Not Found" "Not found"
   | Some c -> c
 
-let open_now c =
-  let now = int_of_float (Unix.gettimeofday ()) in
-  now >= c.Bj.Contest.start && now < c.stop
-
-let started c = int_of_float (Unix.gettimeofday ()) >= c.Bj.Contest.start
-
 let problem c name =
   match List.find_opt (fun p -> p.Bj.Contest.name = name) c.Bj.Contest.problems with
   | Some p -> p
@@ -105,8 +99,8 @@ let scoreboard c =
   "<table><thead><tr><th>Rank</th><th>Name</th><th>Solved</th><th>Problems</th></tr></thead><tbody>" ^
   render 1 (-1) 0 rows ^ "</tbody></table>"
 
-let post c =
-  if not (open_now c) then fail "403 Forbidden" "Contest is not accepting submissions";
+let post (c : Bj.Contest.t) =
+  if c.phase <> Bj.Contest.Running then fail "403 Forbidden" "Contest is not accepting submissions";
   let fields = try Bj.Form.read (env "CONTENT_TYPE") (env "CONTENT_LENGTH") with
     | Invalid_argument message -> fail "400 Bad Request" message
     | End_of_file -> fail "400 Bad Request" "Truncated submission" in
@@ -123,8 +117,10 @@ let post c =
   let s : Bj.Sub.t = { id; contest = Filename.basename c.Bj.Contest.dir; problem = p; name; lang;
     at = int_of_float (Unix.gettimeofday () *. 1000.); attempts = 0; result = None; source } in
   let dir = path (data ()) "pending" in
-  Bj.Sub.write (path dir ("." ^ id)) s;
-  Sys.rename (path dir ("." ^ id)) (path dir id);
+  Bj.Contest.with_lock c.dir (fun () ->
+    if (Bj.Contest.load c.dir).phase <> Bj.Contest.Running then
+      fail "403 Forbidden" "Contest is not accepting submissions";
+    Bj.Sub.write (path dir id) s);
   View.send ~headers:[ "Location", base c.token ^ "/s/" ^ id;
     "Set-Cookie", View.cookie c.token name (env "HTTP_X_FORWARDED_PROTO" = "https") ]
     "303 See Other" markup ""
@@ -133,20 +129,19 @@ let get c tail =
   let b = base c.Bj.Contest.token in
   match tail with
   | [] ->
-      let body = if not (started c) then "<p>Contest has not started.</p>"
+      let body = if c.phase = Bj.Contest.Ready then "<p>Contest has not started.</p>"
         else let problems = List.map (fun p ->
           "<li>" ^ View.link (b ^ "/p/" ^ p.Bj.Contest.name) (p.name ^ ": " ^ p.title) ^ "</li>") c.problems in
           "<ul>" ^ String.concat "" problems ^ "</ul>" ^
-          (if open_now c then "<p>Submissions are open.</p>" else "<p>Contest has ended.</p>") in
-      View.send "200 OK" markup (html c.title (navigation c ^ "<p>" ^ Bj.Contest.format_utc c.start ^
-        " UTC to " ^ Bj.Contest.format_utc c.stop ^ " UTC</p>" ^ body))
-  | [ "p"; name ] when started c ->
+          (if c.phase = Bj.Contest.Running then "<p>Submissions are open.</p>" else "<p>Contest has ended.</p>") in
+      View.send "200 OK" markup (html c.title (navigation c ^ body))
+  | [ "p"; name ] when c.phase <> Bj.Contest.Ready ->
       let p = problem c (segment name) in
       let statement = Bj.File.read (path (path c.dir p.name) "statement.html") in
       View.send "200 OK" markup (html p.title (navigation c ^ statement ^
-        (if open_now c then submit_form c p.name else "")))
+        (if c.phase = Bj.Contest.Running then submit_form c p.name else "")))
   | [ "submit" ] ->
-      if not (open_now c) then fail "403 Forbidden" "Contest is not accepting submissions";
+      if c.phase <> Bj.Contest.Running then fail "403 Forbidden" "Contest is not accepting submissions";
       View.send "200 OK" markup (html "Submit" (navigation c ^ submit_form c ""))
   | [ "s"; id ] ->
       let s, verdict, ce = submission c id in

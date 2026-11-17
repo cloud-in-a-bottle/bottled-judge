@@ -22,27 +22,17 @@ let write p contents mode =
   close_out oc;
   Sys.rename temp p
 
-let date s =
-  let stamp = Contest.time s in
-  if s <> Contest.format_utc stamp then failwith "Use a real UTC date in YYYY-MM-DD HH:MM format";
-  stamp
-
 let title s =
   if String.length s = 0 || String.length s > 100 ||
      String.exists (fun c -> Char.code c < 32 || c = '\127') s then failwith "Invalid title"
-
-let check_times start stop =
-  if date start >= date stop then failwith "End must follow start"
 
 let validate data id =
   let dir = draft data id in
   if not (directory dir) || not (regular (path dir "contest.txt")) then failwith "Invalid draft";
   let header, _ = Kv.read (path dir "contest.txt") in
-  let start = Kv.get header "start" and stop = Kv.get header "end" in
-  check_times start stop;
-  if date start <= int_of_float (Unix.gettimeofday ()) then failwith "Start must be in the future";
   title (Kv.get header "title");
   let c = Contest.load dir in
+  if c.phase <> Contest.Ready then failwith "Draft must be ready";
   if String.length c.token <> 32 || not (String.for_all (function
     | '0'..'9' | 'a'..'f' -> true | _ -> false) c.token) then failwith "Invalid contest link";
   if c.problems = [] then failwith "Add a problem first";

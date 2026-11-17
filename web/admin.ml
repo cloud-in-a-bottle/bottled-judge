@@ -38,16 +38,8 @@ let draft id =
 
 let contest_fields fields =
   let title = get fields "title" in
-  let start = get fields "start" in
-  let stop = get fields "end" in
-  (try Bj.Admin_data.title title; Bj.Admin_data.check_times start stop with
-  | Failure message -> bad message
-  | _ -> bad "Invalid UTC date");
-  (title, start, stop)
-
-let future start =
-  if Bj.Admin_data.date start <= int_of_float (Unix.gettimeofday ()) then
-    bad "Start must be in the future"
+  (try Bj.Admin_data.title title with Failure message -> bad message);
+  title
 
 let token () =
   let ic = open_in_bin "/dev/urandom" in
@@ -55,18 +47,13 @@ let token () =
   close_in ic;
   View.hex bytes
 
-let contest_file dir title secret start stop =
+let contest_file dir title secret =
   Bj.Kv.write (path dir "contest.txt")
-    [ "title", title; "token", secret; "start", start; "end", stop ] ""
+    [ "title", title; "token", secret; "phase", "ready" ] ""
 
-let next_time minutes =
-  Bj.Contest.format_utc (int_of_float (Unix.gettimeofday ()) + minutes * 60)
-
-let contest_form action title start stop button =
+let contest_form action title button =
   "<form method=\"post\" enctype=\"multipart/form-data\" action=\"" ^ escape action ^ "\">" ^
   "<p><label>Title <input name=\"title\" required maxlength=\"100\" value=\"" ^ escape title ^ "\"></label></p>" ^
-  "<p><label>Start (UTC, YYYY-MM-DD HH:MM) <input name=\"start\" required value=\"" ^ escape start ^ "\"></label></p>" ^
-  "<p><label>End (UTC, YYYY-MM-DD HH:MM) <input name=\"end\" required value=\"" ^ escape stop ^ "\"></label></p>" ^
   "<button>" ^ escape button ^ "</button></form>"
 
 let problem_form action title time memory statement button =
@@ -132,20 +119,18 @@ let list_contests () =
       (rows (Bj.Admin_data.contests (data ())) "published")) ^ "</ul>")
 
 let new_contest () =
-  let title, start, stop = contest_fields (form ()) in
-  future start;
+  let title = contest_fields (form ()) in
   let id = Bj.Sub.id () in
   let dir = Bj.Admin_data.draft (data ()) id in
   Unix.mkdir dir 0o700;
-  contest_file dir title (token ()) start stop;
+  contest_file dir title (token ());
   redirect ("/" ^ id)
 
 let update_contest id =
   let dir = draft id in
-  let title, start, stop = contest_fields (form ()) in
-  future start;
+  let title = contest_fields (form ()) in
   let c = Bj.Contest.load dir in
-  contest_file dir title c.token start stop;
+  contest_file dir title c.token;
   redirect ("/" ^ id)
 
 let draft_page id dir =
@@ -155,9 +140,7 @@ let draft_page id dir =
     "<li>" ^ link (base ^ "/p/" ^ p.Bj.Contest.name) p.title ^ "</li>") c.problems in
   page c.title
     ("<p>Draft. Only you can see it.</p>" ^
-    contest_form base c.title
-      (Bj.Kv.get (fst (Bj.Kv.read (path dir "contest.txt"))) "start")
-      (Bj.Kv.get (fst (Bj.Kv.read (path dir "contest.txt"))) "end") "Save" ^
+    contest_form base c.title "Save" ^
     "<h2>Problems</h2><ol>" ^ String.concat "" problems ^ "</ol>" ^
     problem_form (base ^ "/p") "" "2000" "256" "" "Add problem" ^
     post_button (base ^ "/publish") "Publish" ^ post_button (base ^ "/delete") "Delete draft")
@@ -230,6 +213,14 @@ let delete_draft id =
   Bj.Admin_data.remove (draft id);
   redirect "/"
 
+let transition id expected next =
+  let dir = Bj.Admin_data.published (data ()) (valid_id id) in
+  if not (Sys.file_exists dir) then fail "404 Not Found" "Unknown contest";
+  Bj.Contest.with_lock dir (fun () ->
+    if (Bj.Contest.load dir).phase <> expected then fail "409 Conflict" "Contest phase has changed";
+    Bj.Contest.set_phase dir next);
+  redirect ("/" ^ id)
+
 let published_page id dir =
   let c = Bj.Contest.load dir in
   let entries kind =
@@ -247,8 +238,12 @@ let published_page id dir =
     "<tr><td>" ^ link ("/" ^ id ^ "/s/" ^ s.id) s.id ^ "</td><td>" ^ escape s.name ^
     "</td><td>" ^ escape s.problem ^ "</td><td>" ^ escape status ^ "</td></tr>") recent in
   let problems = List.map (fun p -> "<li>" ^ escape (p.Bj.Contest.name ^ ": " ^ p.title) ^ "</li>") c.problems in
+  let phase, action = match c.phase with
+    | Bj.Contest.Ready -> "Ready", post_button ("/" ^ id ^ "/start") "Start contest"
+    | Bj.Contest.Running -> "Accepting submissions", post_button ("/" ^ id ^ "/stop") "Stop submissions"
+    | Bj.Contest.Stopped -> "Stopped", "" in
   page c.title ("<p>Contest link: " ^ link ("/c/" ^ c.token) ("/c/" ^ c.token) ^ "</p>" ^
-    "<p>" ^ Bj.Contest.format_utc c.start ^ " UTC to " ^ Bj.Contest.format_utc c.stop ^ " UTC</p>" ^
+    "<p>" ^ phase ^ "</p>" ^ action ^
     "<p>" ^ string_of_int (List.length all) ^ " submissions; " ^
     string_of_int (List.length (List.filter (fun s -> s.Bj.Sub.result = None) all)) ^ " pending.</p>" ^
     "<h2>Problems</h2><ol>" ^ String.concat "" problems ^ "</ol><h2>Recent submissions</h2>" ^
@@ -285,7 +280,7 @@ let handle parts =
   match env "REQUEST_METHOD", parts with
   | "GET", [] -> list_contests ()
   | "GET", [ "admin" ] -> redirect "/"
-  | "GET", [ "new" ] -> page "New contest" (contest_form "/new" "" (next_time 60) (next_time 240) "Create")
+  | "GET", [ "new" ] -> page "New contest" (contest_form "/new" "" "Create")
   | "POST", [ "new" ] -> new_contest ()
   | "GET", [ id ] -> view_contest id
   | "POST", [ id ] -> update_contest id
@@ -295,6 +290,8 @@ let handle parts =
   | "POST", [ id; "p"; name; "tests" ] -> replace_tests id (letter name)
   | "POST", [ id; "p"; name; "delete" ] -> delete_problem id (letter name)
   | "POST", [ id; "publish" ] -> publish id
+  | "POST", [ id; "start" ] -> transition id Bj.Contest.Ready Bj.Contest.Running
+  | "POST", [ id; "stop" ] -> transition id Bj.Contest.Running Bj.Contest.Stopped
   | "POST", [ id; "delete" ] -> delete_draft id
   | "GET", [ id; "s"; sid ] -> view_submission (valid_id id) sid
   | _ -> fail "404 Not Found" "Not found"
