@@ -56,12 +56,14 @@ let contest_form action title button =
   "<p><label>Title <input name=\"title\" required maxlength=\"100\" value=\"" ^ escape title ^ "\"></label></p>" ^
   "<button>" ^ escape button ^ "</button></form>"
 
-let problem_form action title time memory statement button =
+let problem_form action title time memory statement oracle button =
   "<form method=\"post\" enctype=\"multipart/form-data\" action=\"" ^ escape action ^ "\">" ^
   "<p><label>Title <input name=\"title\" required maxlength=\"100\" value=\"" ^ escape title ^ "\"></label></p>" ^
   "<p><label>Time limit (ms) <input name=\"time\" type=\"number\" min=\"100\" max=\"10000\" required value=\"" ^ escape time ^ "\"></label></p>" ^
   "<p><label>Memory limit (MB) <input name=\"memory\" type=\"number\" min=\"32\" max=\"1024\" required value=\"" ^ escape memory ^ "\"></label></p>" ^
   "<p><label>Statement (HTML)<br><textarea name=\"statement\" rows=\"16\" cols=\"80\">" ^ escape statement ^ "</textarea></label></p>" ^
+  "<p><label>Oracle (Python 3; read proposed input, exit 2 if invalid, otherwise print the exact answer)<br>" ^
+  "<textarea name=\"oracle\" rows=\"14\" cols=\"80\">" ^ escape oracle ^ "</textarea></label></p>" ^
   "<button>" ^ escape button ^ "</button></form>"
 
 let problem_fields fields =
@@ -69,15 +71,20 @@ let problem_fields fields =
   let time = try int_of_string (get fields "time") with _ -> bad "Invalid time limit" in
   let memory = try int_of_string (get fields "memory") with _ -> bad "Invalid memory limit" in
   let statement = get fields "statement" in
+  let oracle = get fields "oracle" in
   (try Bj.Admin_data.title title with Failure message -> bad message);
   if time < 100 || time > 10000 || memory < 32 || memory > 1024 then bad "Invalid problem limits";
   if String.length statement > 100000 then bad "Statement is too long";
-  (title, time, memory, statement)
+  if String.length oracle > 65536 then bad "Oracle is too long";
+  (title, time, memory, statement, oracle)
 
-let save_problem dir title time memory statement =
+let save_problem dir title time memory statement oracle =
   Bj.Kv.write (path dir "problem.txt")
     [ "title", title; "time", string_of_int time; "memory", string_of_int memory ] "";
-  Bj.Admin_data.write (path dir "statement.html") statement 0o644
+  Bj.Admin_data.write (path dir "statement.html") statement 0o644;
+  let file = path dir "oracle.py" in
+  if oracle <> "" then Bj.Admin_data.write file oracle 0o644
+  else if Sys.file_exists file then Unix.unlink file
 
 let load_problem dir name =
   let folder = path dir (letter name) in
@@ -142,7 +149,7 @@ let draft_page id dir =
     ("<p>Draft. Only you can see it.</p>" ^
     contest_form base c.title "Save" ^
     "<h2>Problems</h2><ol>" ^ String.concat "" problems ^ "</ol>" ^
-    problem_form (base ^ "/p") "" "2000" "256" "" "Add problem" ^
+    problem_form (base ^ "/p") "" "2000" "256" "" "" "Add problem" ^
     post_button (base ^ "/publish") "Publish" ^ post_button (base ^ "/delete") "Delete draft")
 
 let draft_problem id name =
@@ -150,11 +157,13 @@ let draft_problem id name =
   let folder = load_problem dir name in
   let h, _ = Bj.Kv.read (path folder "problem.txt") in
   let statement = Bj.File.read (path folder "statement.html") in
+  let oracle = path folder "oracle.py" in
+  let oracle = if Sys.file_exists oracle then Bj.File.read oracle else "" in
   let base = "/" ^ id ^ "/p/" ^ name in
   let tests = path folder "tests" in
   let count = List.length (test_numbers tests) in
   page (Bj.Kv.get h "title") ("<p>" ^ link ("/" ^ id) "Back to draft" ^ "</p>" ^
-    problem_form base (Bj.Kv.get h "title") (Bj.Kv.get h "time") (Bj.Kv.get h "memory") statement "Save" ^
+    problem_form base (Bj.Kv.get h "title") (Bj.Kv.get h "time") (Bj.Kv.get h "memory") statement oracle "Save" ^
     "<h2>Preview</h2>" ^ statement ^ "<h2>Hidden tests</h2><p>" ^
     string_of_int count ^ (if count = 1 then " test pair" else " test pairs") ^ " uploaded.</p>" ^
     "<p>ZIP this exact directory layout, with no surrounding folder:</p>" ^
@@ -165,7 +174,7 @@ let draft_problem id name =
 
 let add_problem id =
   let dir = draft id in
-  let title, time, memory, statement = problem_fields (form ()) in
+  let title, time, memory, statement, oracle = problem_fields (form ()) in
   let rec choose letter =
     if letter > Char.code 'z' then bad "Maximum 26 problems";
     let name = String.make 1 (Char.chr letter) in
@@ -174,15 +183,15 @@ let add_problem id =
   let staging = path dir (".new-" ^ Bj.Sub.id ()) in
   Unix.mkdir staging 0o700;
   Unix.mkdir (path staging "tests") 0o700;
-  save_problem staging title time memory statement;
+  save_problem staging title time memory statement oracle;
   Sys.rename staging (path dir name);
   redirect ("/" ^ id ^ "/p/" ^ name)
 
 let edit_problem id name =
   let dir = draft id in
   let folder = load_problem dir name in
-  let title, time, memory, statement = problem_fields (form ()) in
-  save_problem folder title time memory statement;
+  let title, time, memory, statement, oracle = problem_fields (form ()) in
+  save_problem folder title time memory statement oracle;
   redirect ("/" ^ id ^ "/p/" ^ name)
 
 let replace_tests id name =
@@ -213,11 +222,27 @@ let delete_draft id =
   Bj.Admin_data.remove (draft id);
   redirect "/"
 
+let hack_readiness id c =
+  if c.Bj.Contest.problems = [] then Some "No problems to hack" else
+  let missing = List.find_opt (fun p ->
+    let oracle = path (path c.Bj.Contest.dir p.Bj.Contest.name) "oracle.py" in
+    not (Sys.file_exists oracle && Bj.Admin_data.regular oracle)) c.problems in
+  match missing with
+  | Some p -> Some ("Problem " ^ p.name ^ " needs an oracle before hacks can start")
+  | None ->
+      let pending = path (data ()) "pending" in
+      let waiting = Array.exists (fun name ->
+        Bj.Sub.id_ok name && (Bj.Sub.read (path pending name)).contest = id) (Sys.readdir pending) in
+      if waiting then Some "Wait for all accepted submissions to be judged" else None
+
 let transition id expected next =
   let dir = Bj.Admin_data.published (data ()) (valid_id id) in
   if not (Sys.file_exists dir) then fail "404 Not Found" "Unknown contest";
   Bj.Contest.with_lock dir (fun () ->
-    if (Bj.Contest.load dir).phase <> expected then fail "409 Conflict" "Contest phase has changed";
+    let c = Bj.Contest.load dir in
+    if c.phase <> expected then fail "409 Conflict" "Contest phase has changed";
+    if next = Bj.Contest.Hacking then (match hack_readiness id c with
+      | None -> () | Some message -> fail "409 Conflict" message);
     Bj.Contest.set_phase dir next);
   redirect ("/" ^ id)
 
@@ -241,14 +266,29 @@ let published_page id dir =
   let phase, action = match c.phase with
     | Bj.Contest.Ready -> "Ready", post_button ("/" ^ id ^ "/start") "Start contest"
     | Bj.Contest.Running -> "Accepting submissions", post_button ("/" ^ id ^ "/stop") "Stop submissions"
-    | Bj.Contest.Stopped -> "Stopped", "" in
+    | Bj.Contest.Stopped -> "Submissions stopped", (match hack_readiness id c with
+        | None -> post_button ("/" ^ id ^ "/hacks/start") "Start hacks"
+        | Some message -> "<p>" ^ escape message ^ "</p>")
+    | Bj.Contest.Hacking -> "Accepting hacks", post_button ("/" ^ id ^ "/hacks/stop") "Stop hacks"
+    | Bj.Contest.Finished -> "Finished", "" in
+  let hacks kind =
+    let folder = path (path (data ()) "hacks") kind in
+    List.filter_map (fun name ->
+      if not (Bj.Sub.id_ok name) then None else try
+        let h = Bj.Hack.read (path folder name) in
+        if h.contest = id then Some h else None
+      with _ -> None) (Array.to_list (Sys.readdir folder)) in
+  let hack_rows = List.map (fun (h : Bj.Hack.t) ->
+    let result = match h.result with None -> "pending" | Some r -> Bj.Hack.string_of_outcome r in
+    "<li>" ^ escape (h.name ^ " → " ^ h.target ^ ": " ^ result) ^ "</li>")
+    (List.append (hacks "pending") (hacks "done")) in
   page c.title ("<p>Contest link: " ^ link ("/c/" ^ c.token) ("/c/" ^ c.token) ^ "</p>" ^
     "<p>" ^ phase ^ "</p>" ^ action ^
     "<p>" ^ string_of_int (List.length all) ^ " submissions; " ^
     string_of_int (List.length (List.filter (fun s -> s.Bj.Sub.result = None) all)) ^ " pending.</p>" ^
     "<h2>Problems</h2><ol>" ^ String.concat "" problems ^ "</ol><h2>Recent submissions</h2>" ^
     "<table><tr><th>ID</th><th>Name</th><th>Problem</th><th>Verdict</th></tr>" ^
-    String.concat "" rows ^ "</table>")
+    String.concat "" rows ^ "</table><h2>Hacks</h2><ul>" ^ String.concat "" hack_rows ^ "</ul>")
 
 let view_submission id sid =
   if not (Bj.Sub.id_ok sid) then fail "404 Not Found" "Unknown submission";
@@ -292,6 +332,8 @@ let handle parts =
   | "POST", [ id; "publish" ] -> publish id
   | "POST", [ id; "start" ] -> transition id Bj.Contest.Ready Bj.Contest.Running
   | "POST", [ id; "stop" ] -> transition id Bj.Contest.Running Bj.Contest.Stopped
+  | "POST", [ id; "hacks"; "start" ] -> transition id Bj.Contest.Stopped Bj.Contest.Hacking
+  | "POST", [ id; "hacks"; "stop" ] -> transition id Bj.Contest.Hacking Bj.Contest.Finished
   | "POST", [ id; "delete" ] -> delete_draft id
   | "GET", [ id; "s"; sid ] -> view_submission (valid_id id) sid
   | _ -> fail "404 Not Found" "Not found"

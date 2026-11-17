@@ -1,14 +1,18 @@
 type problem = { name : string; title : string; time : int; memory : int }
-type phase = Ready | Running | Stopped
+type phase = Ready | Running | Stopped | Hacking | Finished
 type t = { dir : string; title : string; token : string; phase : phase; problems : problem list }
 
 let phase_of_string = function
   | "ready" -> Ready
   | "running" -> Running
   | "stopped" -> Stopped
+  | "hacking" -> Hacking
+  | "finished" -> Finished
   | value -> failwith ("Invalid contest phase: " ^ value)
 
-let string_of_phase = function Ready -> "ready" | Running -> "running" | Stopped -> "stopped"
+let string_of_phase = function
+  | Ready -> "ready" | Running -> "running" | Stopped -> "stopped"
+  | Hacking -> "hacking" | Finished -> "finished"
 
 let days y m d =
   let y = if m <= 2 then y - 1 else y in
