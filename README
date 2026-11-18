@@ -4,7 +4,17 @@ bottled-judge
 Owner-defined contests have problems, hidden tests, limits and hacking
 phases. Successful hacks test every accepted solution to that problem.
 Contestants sign in with local accounts; submissions use their
-username@judge.1.bottle.cloud identity.
+username@instance-domain identity.
+
+For remote contests, owners pair instances at /peers using the same
+64-character shared key on both sides. The host URL must be HTTPS and
+match its domain. The owner follows a contest at /connect using the
+host domain and the contest link's 32-character token. Contestants use
+the same /c/<token> pages on their home instance; it signs and relays
+requests while the contest host stores and judges all work. Each
+instance needs its own JUDGE_DOMAIN setting; this instance defaults to
+judge.1.bottle.cloud. Only test installations may use
+JUDGE_ALLOW_HTTP_PEERS=1 to connect over HTTP.
 
 The judge runs on Debian 13 with Python 3.13.5, OCaml 5.3,
 GCC/g++ 14.2 (C23/C++23) and Rust 1.85 (edition 2024).

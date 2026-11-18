@@ -54,6 +54,7 @@ let submit_form (c : Bj.Contest.t) selected =
   "<form method=\"post\" enctype=\"multipart/form-data\" action=\"" ^ View.escape (b ^ "/submit") ^ "\">" ^
   "<p>Submitting as " ^ View.escape user.author ^ ".</p>" ^
   "<input type=\"hidden\" name=\"csrf\" value=\"" ^ user.csrf ^ "\">" ^
+  "<input type=\"hidden\" name=\"request\" value=\"" ^ Bj.Sub.id () ^ "\">" ^
   "<p><label>Problem <select name=\"problem\">" ^ String.concat "" options ^ "</select></label></p>" ^
   "<p><label>Language <select name=\"lang\">" ^
   "<option value=\"c\">C</option><option value=\"cpp\">C++</option><option value=\"py\">Python</option>" ^
@@ -147,16 +148,15 @@ let hack_form (c : Bj.Contest.t) =
   "<form method=\"post\" enctype=\"multipart/form-data\" action=\"" ^ b ^ "/hack\">" ^
   "<p>Hacking as " ^ View.escape user.author ^ ".</p>" ^
   "<input type=\"hidden\" name=\"csrf\" value=\"" ^ user.csrf ^ "\">" ^
+  "<input type=\"hidden\" name=\"request\" value=\"" ^ Bj.Sub.id () ^ "\">" ^
   "<p><label>Target <select name=\"target\">" ^ String.concat "" options ^ "</select></label></p>" ^
   "<p><label>Proposed input<br><textarea name=\"input\" rows=\"12\" cols=\"80\" maxlength=\"65536\"></textarea></label></p>" ^
   "<p><label>Or upload input <input name=\"file\" type=\"file\"></label></p>" ^
   "<button>Submit hack</button></form>"
 
-let post_hack (c : Bj.Contest.t) =
-  if c.phase <> Bj.Contest.Hacking then fail "403 Forbidden" "Hacks are not open";
+let post_hack ?fields (c : Bj.Contest.t) =
   let user = require_user () in
-  let fields = try Bj.Form.read (env "CONTENT_TYPE") (env "CONTENT_LENGTH") with
-    | Invalid_argument message -> fail "400 Bad Request" message in
+  let fields = match fields with Some fields -> fields | None -> Bj.Form.read (env "CONTENT_TYPE") (env "CONTENT_LENGTH") in
   if not (Bj.Contest.same (Bj.Form.get fields "csrf") user.csrf) then
     fail "403 Forbidden" "Invalid form token";
   let target = Bj.Form.get fields "target" in
@@ -165,24 +165,33 @@ let post_hack (c : Bj.Contest.t) =
   let pasted = match List.assoc_opt "input" fields with Some s -> s | None -> "" in
   let input = if file <> "" then file else pasted in
   if input = "" || String.length input > 65536 then fail "400 Bad Request" "Input must be 1 to 65536 bytes";
-  let target_file = path (path (data ()) "done") target in
-  let s = try Bj.Sub.read target_file with _ -> fail "404 Not Found" "Target not found" in
-  if s.contest <> Filename.basename c.dir || s.author = user.author ||
-     (match s.result with Some r -> r.verdict <> "AC" | None -> true) then
-    fail "400 Bad Request" "Target must be another contestant's accepted submission";
-  let id = Bj.Sub.id () in
-  let h : Bj.Hack.t = { id; contest = s.contest; problem = s.problem; target; author = user.author;
-    at = int_of_float (Unix.gettimeofday () *. 1000.); attempts = 0; result = None; input; expected = None } in
-  Bj.Contest.with_lock c.dir (fun () ->
-    if (Bj.Contest.load c.dir).phase <> Bj.Contest.Hacking then fail "403 Forbidden" "Hacks are not open";
-    Bj.Hack.write (path (path (path (data ()) "hacks") "pending") id) h);
+  let id = match !(Peer.request) with
+    | None -> Bj.Sub.id ()
+    | Some id -> if Bj.Form.get fields "request" <> id then fail "400 Bad Request" "Invalid request ID"; id in
+  Peer.with_request_lock (fun () -> Bj.Contest.with_lock c.dir (fun () ->
+    let pending = path (path (path (data ()) "hacks") "pending") id in
+    let done_file = path (path (path (data ()) "hacks") "done") id in
+    if Sys.file_exists pending || Sys.file_exists done_file then begin
+      let h = Bj.Hack.read (if Sys.file_exists done_file then done_file else pending) in
+      if h.author <> user.author || h.contest <> Filename.basename c.dir ||
+         h.target <> target || h.input <> input then fail "409 Conflict" "Request ID already used"
+    end else begin
+      if (Bj.Contest.load c.dir).phase <> Bj.Contest.Hacking then fail "403 Forbidden" "Hacks are not open";
+      let target_file = path (path (data ()) "done") target in
+      let s = try Bj.Sub.read target_file with _ -> fail "404 Not Found" "Target not found" in
+      if s.contest <> Filename.basename c.dir || s.author = user.author ||
+         (match s.result with Some r -> r.verdict <> "AC" | None -> true) then
+        fail "400 Bad Request" "Target must be another contestant's accepted submission";
+      let h : Bj.Hack.t = { id; contest = s.contest; problem = s.problem; target; author = user.author;
+        at = int_of_float (Unix.gettimeofday () *. 1000.); attempts = 0; result = None; input; expected = None } in
+      Bj.Hack.write pending h
+    end));
   View.send ~headers:[ "Location", base c.token ^ "/h/" ^ id ]
     "303 See Other" markup ""
 
-let post (c : Bj.Contest.t) =
-  if c.phase <> Bj.Contest.Running then fail "403 Forbidden" "Contest is not accepting submissions";
+let post ?fields (c : Bj.Contest.t) =
   let user = require_user () in
-  let fields = try Bj.Form.read (env "CONTENT_TYPE") (env "CONTENT_LENGTH") with
+  let fields = match fields with Some fields -> fields | None -> try Bj.Form.read (env "CONTENT_TYPE") (env "CONTENT_LENGTH") with
     | Invalid_argument message -> fail "400 Bad Request" message
     | End_of_file -> fail "400 Bad Request" "Truncated submission" in
   if not (Bj.Contest.same (Bj.Form.get fields "csrf") user.csrf) then
@@ -194,14 +203,23 @@ let post (c : Bj.Contest.t) =
   let paste = match List.assoc_opt "source" fields with Some s -> s | None -> "" in
   let source = if file <> "" then file else paste in
   if source = "" || String.length source > 65536 then fail "400 Bad Request" "Source must be between 1 and 65536 bytes";
-  let id = Bj.Sub.id () in
+  let id = match !(Peer.request) with
+    | None -> Bj.Sub.id ()
+    | Some id -> if Bj.Form.get fields "request" <> id then fail "400 Bad Request" "Invalid request ID"; id in
   let s : Bj.Sub.t = { id; contest = Filename.basename c.Bj.Contest.dir; problem = p; author = user.author; lang;
     at = int_of_float (Unix.gettimeofday () *. 1000.); attempts = 0; result = None; source } in
   let dir = path (data ()) "pending" in
-  Bj.Contest.with_lock c.dir (fun () ->
-    if (Bj.Contest.load c.dir).phase <> Bj.Contest.Running then
-      fail "403 Forbidden" "Contest is not accepting submissions";
-    Bj.Sub.write (path dir id) s);
+  Peer.with_request_lock (fun () -> Bj.Contest.with_lock c.dir (fun () ->
+    let pending = path dir id and done_file = path (path (data ()) "done") id in
+    if Sys.file_exists pending || Sys.file_exists done_file then begin
+      let old = Bj.Sub.read (if Sys.file_exists done_file then done_file else pending) in
+      if old.author <> s.author || old.contest <> s.contest || old.problem <> s.problem ||
+         old.lang <> s.lang || old.source <> s.source then fail "409 Conflict" "Request ID already used"
+    end else begin
+      if (Bj.Contest.load c.dir).phase <> Bj.Contest.Running then
+        fail "403 Forbidden" "Contest is not accepting submissions";
+      Bj.Sub.write pending s
+    end));
   View.send ~headers:[ "Location", base c.token ^ "/s/" ^ id ]
     "303 See Other" markup ""
 
@@ -284,14 +302,27 @@ let route () =
   | [ ""; "c"; "theme.css" ] when env "REQUEST_METHOD" = "GET" ->
       View.send "200 OK" "text/css; charset=utf-8" (Bj.File.read "/src/web/theme.css")
   | [ ""; "c"; page ] when List.mem page [ "signup"; "login"; "logout"; "me" ] -> Account.handle page
-  | "" :: "c" :: token :: tail when valid token ->
+  | "" :: "c" :: "f" :: "v1" :: token :: tail when Account.next_token token = token && token <> "" ->
+      let user, request, body = Peer.incoming () in
+      Account.remote := Some user;
+      Peer.request := (if env "REQUEST_METHOD" = "POST" then Some request else None);
       let c = contest token in
-      let tail = if tail = [ "" ] then [] else tail in
       (match env "REQUEST_METHOD", tail with
        | "GET", _ -> get c tail
-       | "POST", [ "submit" ] -> post c
-       | "POST", [ "hack" ] -> post_hack c
-      | _ -> fail "405 Method Not Allowed" "Method not allowed")
+       | "POST", [ "submit" ] -> post ~fields:(Bj.Form.parse (env "CONTENT_TYPE") body) c
+       | "POST", [ "hack" ] -> post_hack ~fields:(Bj.Form.parse (env "CONTENT_TYPE") body) c
+       | _ -> fail "405 Method Not Allowed" "Method not allowed")
+  | "" :: "c" :: token :: tail when valid token ->
+      let tail = if tail = [ "" ] then [] else tail in
+      (match Bj.Contest.find (path (data ()) "contests") token with
+       | Some c ->
+           (match env "REQUEST_METHOD", tail with
+            | "GET", _ -> get c tail
+            | "POST", [ "submit" ] -> post c
+            | "POST", [ "hack" ] -> post_hack c
+            | _ -> fail "405 Method Not Allowed" "Method not allowed")
+       | None when Account.next_token token = token && Peer.remote token <> None -> Peer.forward token tail
+       | None -> fail "404 Not Found" "Not found")
   | "" :: tail -> Admin.handle (if tail = [ "" ] then [] else tail)
   | _ -> fail "404 Not Found" "Not found"
 

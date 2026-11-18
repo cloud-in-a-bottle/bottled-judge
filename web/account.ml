@@ -3,11 +3,14 @@ let env name = try Sys.getenv name with Not_found -> ""
 let data () = Sys.getenv "OPENHOST_APP_DATA_DIR"
 let accounts () = path (data ()) "accounts"
 let sessions () = path (data ()) "sessions"
-let domain = "judge.1.bottle.cloud"
-let author username = username ^ "@" ^ domain
+let domain () = match Sys.getenv_opt "JUDGE_DOMAIN" with
+  | Some domain -> domain
+  | None -> "judge.1.bottle.cloud"
+let author username = username ^ "@" ^ domain ()
 let lifetime = 30 * 24 * 60 * 60
 
 type t = { author : string; csrf : string }
+let remote : t option option ref = ref None
 
 let username_ok name =
   let n = String.length name in
@@ -81,7 +84,7 @@ let token () =
       if valid_token value then Some value else None
     else None) (String.split_on_char ';' cookies)
 
-let current () =
+let local () =
   match token () with
   | None -> None
   | Some token ->
@@ -94,6 +97,8 @@ let current () =
           if not (Bj.Contest.same epoch (get "epoch")) then None
           else Some { author = author username; csrf = get "csrf" }
       with _ -> None
+
+let current () = match !remote with Some user -> user | None -> local ()
 
 let new_session username epoch =
   let token = random 32 and csrf = random 16 in

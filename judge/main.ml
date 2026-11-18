@@ -365,6 +365,10 @@ let prepare () =
   access (path (data ()) "accounts") 1000 1000 0o700;
   ensure (path (data ()) "sessions") 0o700;
   access (path (data ()) "sessions") 1000 1000 0o700;
+  ensure (path (data ()) "peers") 0o700;
+  access (path (data ()) "peers") 1000 1000 0o700;
+  ensure (path (data ()) "remote") 0o700;
+  access (path (data ()) "remote") 1000 1000 0o700;
   ensure (pending ()) 0o700;
   access (pending ()) 1000 1000 0o700;
   ensure (done_dir ()) 0o755;
@@ -384,6 +388,8 @@ let prepare () =
     end) (Sys.readdir (hack_done ()))
 
 let serve () =
+  if Sys.getenv_opt "JUDGE_DOMAIN" = None then Unix.putenv "JUDGE_DOMAIN" "judge.1.bottle.cloud";
+  if Sys.getenv_opt "JUDGE_ALLOW_HTTP_PEERS" = None then Unix.putenv "JUDGE_ALLOW_HTTP_PEERS" "0";
   prepare ();
   Sys.set_signal Sys.sigterm (Sys.Signal_handle (fun _ -> (try Unix.kill (-1) Sys.sigterm with _ -> ()); exit 0));
   let l = Unix.create_process "lighttpd" [| "lighttpd"; "-D"; "-f"; "/src/lighttpd.conf" |] Unix.stdin Unix.stdout Unix.stderr in
