@@ -301,6 +301,7 @@ let route () =
   match parts with
   | [ ""; "c"; "theme.css" ] when env "REQUEST_METHOD" = "GET" ->
       View.send "200 OK" "text/css; charset=utf-8" (Bj.File.read "/src/web/theme.css")
+  | [ ""; "c"; "join" ] -> Peer.handle_join ()
   | [ ""; "c"; page ] when List.mem page [ "signup"; "login"; "logout"; "me" ] -> Account.handle page
   | "" :: "c" :: "f" :: "v1" :: token :: tail when Account.next_token token = token && token <> "" ->
       let user, request, body = Peer.incoming () in

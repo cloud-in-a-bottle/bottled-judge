@@ -38,13 +38,23 @@ let add name url key =
 let list () = List.sort compare (List.filter name_ok (Array.to_list (Sys.readdir (peers ()))))
 
 let connect name token =
-  if not (name_ok name && Sys.file_exists (peer_file name) && Account.next_token token = token && token <> "") then
-    invalid_arg "Invalid contest or peer";
   if Bj.Contest.find (path (data ()) "contests") token <> None then invalid_arg "Local contest already exists";
   let file = path (routes ()) token in
   if Sys.file_exists file then begin
     if String.trim (Bj.File.read file) <> name then invalid_arg "Contest already followed"
   end else Bj.Admin_data.write file (name ^ "\n") 0o600
+
+let join url =
+  let matches = List.filter_map (fun name ->
+    let fields, _ = Bj.Kv.read (peer_file name) in
+    let prefix = Bj.Kv.get fields "url" ^ "/c/" in
+    if not (String.starts_with ~prefix url) then None else
+      let rest = String.sub url (String.length prefix) (String.length url - String.length prefix) in
+      let token = if String.ends_with ~suffix:"/" rest then String.sub rest 0 (String.length rest - 1) else rest in
+      if Account.next_token token = token && token <> "" then Some (name, token) else None) (list ()) in
+  match matches with
+  | [ name, token ] -> name, token
+  | _ -> invalid_arg "Invalid contest URL or unpaired host"
 
 let remote token =
   let file = path (routes ()) token in
@@ -79,6 +89,31 @@ let run mode body values direct =
         value in
   let _, status = Unix.waitpid [] pid in
   response, status
+
+let handle_join () =
+  let page body = View.send "200 OK" "text/html; charset=utf-8" (View.page "Join contest" body) in
+  match env "REQUEST_METHOD", Account.local () with
+  | "GET", None -> page ("<p>" ^ View.link "/c/login" "Sign in" ^ " or " ^
+      View.link "/c/signup" "create an account" ^ " to join a contest.</p>")
+  | "GET", Some user ->
+      page ("<form method=\"post\" enctype=\"multipart/form-data\" action=\"/c/join\">" ^
+        "<input type=\"hidden\" name=\"csrf\" value=\"" ^ user.csrf ^ "\">" ^
+        "<p><label>Contest URL <input type=\"url\" name=\"url\" required placeholder=\"https://judge.example/c/...\"></label></p>" ^
+        "<button>Join contest</button></form>")
+  | "POST", Some user ->
+      let fields = Bj.Form.read (env "CONTENT_TYPE") (env "CONTENT_LENGTH") in
+      if not (Bj.Contest.same (Bj.Form.get fields "csrf") user.csrf) then invalid_arg "Invalid form token";
+      let name, token = join (String.trim (Bj.Form.get fields "url")) in
+      let values = [ "FED_PEER", name; "FED_METHOD", "GET";
+        "FED_PATH", "/c/f/v1/" ^ token; "FED_AUTHOR", user.author;
+        "FED_CSRF", user.csrf; "FED_REQUEST", ""; "FED_CONTENT_TYPE", "" ] in
+      let response, status = run "check" "" values false in
+      if status <> Unix.WEXITED 0 || response <> "ok" then invalid_arg "Contest link unavailable";
+      connect name token;
+      View.send ~headers:[ "Location", "/c/" ^ token ] "303 See Other" "text/html; charset=utf-8" ""
+  | "POST", None -> View.send "401 Unauthorized" "text/html; charset=utf-8"
+      (View.page "Sign in" ("<p>" ^ View.link "/c/login" "Sign in" ^ " first.</p>"))
+  | _ -> View.send "405 Method Not Allowed" "text/html; charset=utf-8" (View.page "Not allowed" "")
 
 let incoming () =
   let body = if env "REQUEST_METHOD" = "POST" then read_body () else "" in

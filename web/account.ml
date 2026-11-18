@@ -176,6 +176,7 @@ let form action next label =
 
 let current_page account =
   send "200 OK" "Account" ("<p>Signed in as " ^ View.escape account.author ^ ".</p>" ^
+    "<p>" ^ View.link "/c/join" "Join a contest" ^ "</p>" ^
     "<form method=\"post\" enctype=\"multipart/form-data\" action=\"/c/logout\">" ^
     "<input type=\"hidden\" name=\"csrf\" value=\"" ^ account.csrf ^ "\">" ^
     "<button>Sign out</button></form>")

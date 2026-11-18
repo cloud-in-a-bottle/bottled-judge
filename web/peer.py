@@ -60,7 +60,7 @@ def verify():
     print('ok')
 
 
-def send():
+def send(check=False):
     name = os.environ['FED_PEER']
     url, key = peer(name)
     parsed = urllib.parse.urlsplit(url)
@@ -94,7 +94,12 @@ def send():
         content = response.read(4194305)
         if len(content) > 4194304:
             raise ValueError('Response too large')
-        output(response.status, response.reason, response.getheaders(), content)
+        if check:
+            if response.status != 200:
+                raise ValueError('Contest unavailable')
+            print('ok')
+        else:
+            output(response.status, response.reason, response.getheaders(), content)
     finally:
         connection.close()
 
@@ -116,8 +121,10 @@ if __name__ == '__main__':
             verify()
         except (OSError, ValueError, KeyError, UnicodeError, OverflowError):
             raise SystemExit(2)
-    elif sys.argv[1] == 'send':
+    elif sys.argv[1] in ('send', 'check'):
         try:
-            send()
+            send(sys.argv[1] == 'check')
         except (OSError, ValueError, KeyError, UnicodeError, http.client.HTTPException):
+            if sys.argv[1] == 'check':
+                raise SystemExit(2)
             output(502, 'Bad Gateway', [('Content-Type', 'text/plain; charset=utf-8')], b'Contest host unavailable')

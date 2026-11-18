@@ -11,7 +11,7 @@ let link = View.link
 let page ?(headers = []) title body =
   View.send ~headers "200 OK" "text/html; charset=utf-8"
     (View.page title ("<nav>" ^ link "/" "Contests" ^ " | " ^ link "/users" "Users" ^
-      " | " ^ link "/peers" "Peers" ^ " | " ^ link "/connect" "Remote contests" ^ "</nav>" ^ body))
+      " | " ^ link "/peers" "Peers" ^ " | " ^ link "/c/join" "Join contest" ^ "</nav>" ^ body))
 
 let redirect target = View.send ~headers:[ "Location", target ] "303 See Other" "text/html; charset=utf-8" ""
 
@@ -169,22 +169,6 @@ let add_peer () =
   (try Peer.add name url key with Invalid_argument message -> bad message);
   page "Peer paired" ("<p>Share this key with the owner of " ^ escape name ^
     ". It is shown only now.</p><pre>" ^ key ^ "</pre>" ^ link "/peers" "Peers")
-
-let connect_page () =
-  let entries = Array.to_list (Sys.readdir (Peer.routes ())) |> List.filter_map (fun token ->
-    if Account.next_token token <> token || token = "" then None
-    else Some ("<li>" ^ link ("/c/" ^ token) (token ^ " @ " ^ String.trim (Bj.File.read (path (Peer.routes ()) token))) ^ "</li>")) in
-  page "Remote contests" ("<ul>" ^ String.concat "" entries ^ "</ul>" ^
-    "<form method=\"post\" enctype=\"multipart/form-data\" action=\"/connect\">" ^
-    "<p><label>Host domain <input name=\"peer\" required></label></p>" ^
-    "<p><label>Contest token <input name=\"token\" required minlength=\"32\" maxlength=\"32\"></label></p>" ^
-    "<button>Follow contest</button></form>")
-
-let connect () =
-  let fields = form () in
-  let token = get fields "token" in
-  (try Peer.connect (get fields "peer") token with Invalid_argument message -> bad message);
-  redirect ("/c/" ^ token)
 
 let new_contest () =
   let title = contest_fields (form ()) in
@@ -388,8 +372,6 @@ let handle parts =
   | "POST", [ "users"; name; "reset" ] -> reset_user name
   | "GET", [ "peers" ] -> list_peers ()
   | "POST", [ "peers" ] -> add_peer ()
-  | "GET", [ "connect" ] -> connect_page ()
-  | "POST", [ "connect" ] -> connect ()
   | "GET", [ "new" ] -> page "New contest" (contest_form "/new" "" "Create")
   | "POST", [ "new" ] -> new_contest ()
   | "GET", [ id ] -> view_contest id
