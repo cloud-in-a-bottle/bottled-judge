@@ -10,7 +10,7 @@ let link = View.link
 
 let page ?(headers = []) title body =
   View.send ~headers "200 OK" "text/html; charset=utf-8"
-    (View.page title ("<nav>" ^ link "/" "Contests" ^ "</nav>" ^ body))
+    (View.page title ("<nav>" ^ link "/" "Contests" ^ " | " ^ link "/users" "Users" ^ "</nav>" ^ body))
 
 let redirect target = View.send ~headers:[ "Location", target ] "303 See Other" "text/html; charset=utf-8" ""
 
@@ -124,6 +124,29 @@ let list_contests () =
     "<ul>" ^ String.concat "" (List.append
       (rows (Bj.Admin_data.drafts (data ())) "draft")
       (rows (Bj.Admin_data.contests (data ())) "published")) ^ "</ul>")
+
+let list_users () =
+  let entries = List.map (fun name ->
+    "<li>" ^ link ("/users/" ^ name) (Account.author name) ^ "</li>") (Account.users ()) in
+  page "Users" ("<ul>" ^ String.concat "" entries ^ "</ul>")
+
+let user_page name =
+  let username = Account.normalize name in
+  if not (Account.username_ok username) ||
+     not (Sys.file_exists (Account.account_file username)) then
+    fail "404 Not Found" "Unknown user";
+  let notice = if env "QUERY_STRING" = "reset=1" then
+    "<p>Password changed. Existing sessions are invalid.</p>" else "" in
+  page (Account.author username) (notice ^
+    "<form method=\"post\" enctype=\"multipart/form-data\" action=\"/users/" ^ username ^ "/reset\">" ^
+    "<p><label>New password <input type=\"password\" name=\"password\" required minlength=\"12\" maxlength=\"128\" autocomplete=\"new-password\"></label></p>" ^
+    "<button>Reset password</button></form>")
+
+let reset_user name =
+  let username = Account.normalize name in
+  let fields = form () in
+  (try Account.reset username (get fields "password") with Invalid_argument message -> bad message);
+  redirect ("/users/" ^ username ^ "?reset=1")
 
 let new_contest () =
   let title = contest_fields (form ()) in
@@ -260,7 +283,7 @@ let published_page id dir =
   let recent = List.filteri (fun i _ -> i < 50) all in
   let rows = List.map (fun (s : Bj.Sub.t) ->
     let status = match s.result with None -> "pending" | Some r -> r.verdict in
-    "<tr><td>" ^ link ("/" ^ id ^ "/s/" ^ s.id) s.id ^ "</td><td>" ^ escape s.name ^
+    "<tr><td>" ^ link ("/" ^ id ^ "/s/" ^ s.id) s.id ^ "</td><td>" ^ escape s.author ^
     "</td><td>" ^ escape s.problem ^ "</td><td>" ^ escape status ^ "</td></tr>") recent in
   let problems = List.map (fun p -> "<li>" ^ escape (p.Bj.Contest.name ^ ": " ^ p.title) ^ "</li>") c.problems in
   let phase, action = match c.phase with
@@ -282,7 +305,7 @@ let published_page id dir =
     let applied = path (path (path (data ()) "hacks") "done") (h.id ^ ".applied") in
     let result = if h.result = Some Bj.Hack.Success && not (Sys.file_exists applied) then "pending"
       else match h.result with None -> "pending" | Some r -> Bj.Hack.string_of_outcome r in
-    "<li>" ^ escape (h.name ^ " → " ^ h.target ^ ": " ^ result) ^ "</li>")
+    "<li>" ^ escape (h.author ^ " → " ^ h.target ^ ": " ^ result) ^ "</li>")
     (List.append (hacks "pending") (hacks "done")) in
   page c.title ("<p>Contest link: " ^ link ("/c/" ^ c.token) ("/c/" ^ c.token) ^ "</p>" ^
     "<p>" ^ phase ^ "</p>" ^ action ^
@@ -306,7 +329,7 @@ let view_submission id sid =
   let error = if Sys.file_exists ce then
     "<h2>Compiler output</h2><pre>" ^ escape (Bj.File.read ce) ^ "</pre>" else "" in
   page "Submission" ("<p>" ^ link ("/" ^ id) "Back to contest" ^ "</p>" ^
-    "<p>" ^ escape (s.name ^ " / " ^ s.problem ^ " / " ^ result) ^ "</p>" ^
+    "<p>" ^ escape (s.author ^ " / " ^ s.problem ^ " / " ^ result) ^ "</p>" ^
     "<h2>Source</h2><pre>" ^ escape s.source ^ "</pre>" ^ error)
 
 let view_contest id =
@@ -322,6 +345,9 @@ let handle parts =
   match env "REQUEST_METHOD", parts with
   | "GET", [] -> list_contests ()
   | "GET", [ "admin" ] -> redirect "/"
+  | "GET", [ "users" ] -> list_users ()
+  | "GET", [ "users"; name ] -> user_page name
+  | "POST", [ "users"; name; "reset" ] -> reset_user name
   | "GET", [ "new" ] -> page "New contest" (contest_form "/new" "" "Create")
   | "POST", [ "new" ] -> new_contest ()
   | "GET", [ id ] -> view_contest id

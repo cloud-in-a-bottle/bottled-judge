@@ -30,9 +30,9 @@ let field header =
           (match List.filter_map (fun a ->
             if String.starts_with ~prefix:"name=\"" a && String.ends_with ~suffix:"\"" a then
               Some (slice a 6 (String.length a - 1)) else None) attrs with
-          | [ name ] when List.mem name [ "name"; "problem"; "lang"; "source"; "file";
-            "title"; "start"; "end"; "time"; "memory"; "statement";
-            "archive"; "oracle"; "target"; "input" ] -> name
+          | [ name ] when List.mem name [ "username"; "password"; "next"; "csrf";
+            "problem"; "lang"; "source"; "file"; "title"; "time"; "memory";
+            "statement"; "archive"; "oracle"; "target"; "input" ] -> name
           | _ -> bad ())
       | _ -> bad ())
   | _ -> bad ()

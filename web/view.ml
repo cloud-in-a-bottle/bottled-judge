@@ -24,28 +24,3 @@ let hex s =
   let b = Buffer.create (2 * String.length s) in
   String.iter (fun c -> Printf.bprintf b "%02x" (Char.code c)) s;
   Buffer.contents b
-
-let unhex s =
-  let n = String.length s in
-  if n = 0 || n > 64 || n mod 2 <> 0 then None
-  else try
-    let b = Bytes.create (n / 2) in
-    let rec decode i =
-      if i < n / 2 then begin
-        Bytes.set b i (Char.chr (int_of_string ("0x" ^ String.sub s (2 * i) 2)));
-        decode (i + 1)
-      end
-    in
-    decode 0;
-    Some (Bytes.to_string b)
-  with _ -> None
-
-let name_cookie () =
-  let value = try Sys.getenv "HTTP_COOKIE" with Not_found -> "" in
-  let pairs = List.map String.trim (String.split_on_char ';' value) in
-  let pair = List.find_opt (String.starts_with ~prefix:"judge_name=") pairs in
-  match pair with None -> None | Some p -> unhex (String.sub p 11 (String.length p - 11))
-
-let cookie token name secure =
-  "judge_name=" ^ hex name ^ "; Path=/c/" ^ token ^ "/; HttpOnly; SameSite=Lax" ^
-  (if secure then "; Secure" else "")

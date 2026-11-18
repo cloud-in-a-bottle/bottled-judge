@@ -262,12 +262,7 @@ let apply_hack h =
     | _ -> failwith "Hack target is not accepted");
     let expected = match h.expected with
       | Some expected -> expected
-      | None ->
-          let expected = match oracle_output h with
-            | Ok expected -> expected
-            | Error _ -> failwith "Cannot recover hack oracle output" in
-          Bj.Hack.write (path (hack_done ()) h.id) { h with expected = Some expected };
-          expected in
+      | None -> failwith "Successful hack needs an answer" in
     let private_files = private_dir () in
     let input = path private_files "input" in
     let answer = path private_files "expected" in
@@ -366,6 +361,10 @@ let prepare () =
   ensure (path (data ()) "contests") 0o755;
   ensure (Bj.Admin_data.drafts (data ())) 0o700;
   access (Bj.Admin_data.drafts (data ())) 1000 1000 0o700;
+  ensure (path (data ()) "accounts") 0o700;
+  access (path (data ()) "accounts") 1000 1000 0o700;
+  ensure (path (data ()) "sessions") 0o700;
+  access (path (data ()) "sessions") 1000 1000 0o700;
   ensure (pending ()) 0o700;
   access (pending ()) 1000 1000 0o700;
   ensure (done_dir ()) 0o755;
@@ -378,13 +377,6 @@ let prepare () =
   access (hack_done ()) 0 1000 0o750;
   ensure (temp ()) 0o755;
   secure_contests ();
-  let migrate parent is_draft =
-    Array.iter (fun name ->
-      let dir = path parent name in
-      if name.[0] <> '.' && Sys.is_directory dir && Sys.file_exists (path dir "contest.txt") then
-        Bj.Contest.migrate dir is_draft) (Sys.readdir parent) in
-  migrate (path (data ()) "contests") false;
-  migrate (Bj.Admin_data.drafts (data ())) true;
   Array.iter (fun id ->
     if Bj.Sub.id_ok id then begin
       let h = Bj.Hack.read (path (hack_done ()) id) in

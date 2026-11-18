@@ -3,7 +3,8 @@ bottled-judge
 
 Owner-defined contests have problems, hidden tests, limits and hacking
 phases. Successful hacks test every accepted solution to that problem.
-Contestant labels are unauthenticated.
+Contestants sign in with local accounts; submissions use their
+username@judge.1.bottle.cloud identity.
 
 The judge runs on Debian 13 with Python 3.13.5, OCaml 5.3,
 GCC/g++ 14.2 (C23/C++23) and Rust 1.85 (edition 2024).
