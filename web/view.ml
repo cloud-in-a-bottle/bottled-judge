@@ -12,11 +12,11 @@ let escape s =
 let link url label = "<a href=\"" ^ escape url ^ "\">" ^ escape label ^ "</a>"
 
 let page title body =
-  "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>" ^
+  "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><link rel=\"stylesheet\" href=\"/c/theme.css\"><title>" ^
   escape title ^ "</title></head><body><h1>" ^ escape title ^ "</h1>" ^ body ^ "</body></html>"
 
 let send ?(headers = []) status kind body =
-  Printf.printf "Status: %s\r\nContent-Type: %s\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'none'; style-src 'none'; script-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'\r\n" status kind;
+  Printf.printf "Status: %s\r\nContent-Type: %s\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'none'; style-src 'self'; script-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'\r\n" status kind;
   List.iter (fun (k, v) -> Printf.printf "%s: %s\r\n" k v) headers;
   Printf.printf "\r\n%s" body
 

@@ -1,0 +1,24 @@
+html { font: 12px/1.45 Arial, Verdana, sans-serif; color: #24272a; background: #f8f9f8; }
+body { max-width: 1100px; margin: 0 auto; padding: 12px 20px 40px; }
+h1 { margin: 8px 0 14px; font-size: 19px; font-weight: bold; padding: 0; color: #24272a; background: #f8f9f8; border-bottom: 1px solid #355688; }
+h2 { margin: 22px 0 8px; padding-bottom: 3px; font-size: 15px; color: #355688; border-bottom: 1px solid #a7adb0; }
+h3 { margin: 16px 0 6px; font-size: 14px; }
+a { color: #355688; }
+nav { margin-bottom: 18px; padding: 5px 9px; border: 1px solid #a7adb0; background: #ebedee; color: #24272a; }
+nav a { color: #24272a; font-size: 12px; font-weight: bold; text-transform: uppercase; text-decoration: none; }
+nav a:hover { text-decoration: underline; }
+ul, ol { padding-left: 24px; }
+li { margin: 3px 0; }
+form { margin: 14px 0; padding: 8px 10px; border: 1px solid #a7adb0; background: #fbfcfc; }
+form p { margin: 9px 0; }
+input, select, textarea, button, input::file-selector-button { font: inherit; color: #24272a; background: #fff; border-radius: 0; }
+input:not([type="file"]), select, textarea, button, input::file-selector-button { border: 1px solid #a7adb0; }
+input[type="file"] { border: 0; padding: 0; background: transparent; }
+textarea { display: block; width: 100%; max-width: 720px; font: 12px/1.45 monospace; }
+button, input::file-selector-button { padding: 2px 9px; background: #e9eaea; }
+button:active { border-style: inset; }
+:focus-visible { outline: 2px solid #355688; outline-offset: 2px; }
+table { display: block; width: 100%; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+th, td { padding: 3px 6px; border: 1px solid #cfd2d4; text-align: left; }
+th { background: #ebedee; }
+pre { max-width: 100%; overflow-x: auto; padding: 8px; border: 1px solid #cfd2d4; background: #fcfcfc; }

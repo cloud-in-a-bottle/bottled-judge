@@ -49,12 +49,12 @@ let submit_form c selected =
     "<option value=\"" ^ View.escape name ^ "\"" ^ (if name = selected then " selected" else "") ^
     ">" ^ View.escape (name ^ ": " ^ p.title) ^ "</option>") c.problems in
   "<form method=\"post\" enctype=\"multipart/form-data\" action=\"" ^ View.escape (b ^ "/submit") ^ "\">" ^
-  "<p><label>Name <input name=\"name\" required maxlength=\"32\" value=\"" ^ View.escape (receive_name ()) ^ "\"></label></p>" ^
+  "<p><label>Name <input name=\"name\" required maxlength=\"32\" pattern=\"[!-~]([ -~]{0,30}[!-~])?\" title=\"1 to 32 printable ASCII characters with no leading or trailing spaces\" value=\"" ^ View.escape (receive_name ()) ^ "\"></label></p>" ^
   "<p><label>Problem <select name=\"problem\">" ^ String.concat "" options ^ "</select></label></p>" ^
   "<p><label>Language <select name=\"lang\">" ^
   "<option value=\"c\">C</option><option value=\"cpp\">C++</option><option value=\"py\">Python</option>" ^
   "<option value=\"rs\">Rust</option><option value=\"ml\">OCaml</option></select></label></p>" ^
-  "<p><label>Paste code<br><textarea name=\"source\" rows=\"18\" cols=\"80\" spellcheck=\"false\"></textarea></label></p>" ^
+  "<p><label>Paste code<br><textarea name=\"source\" rows=\"18\" cols=\"80\" maxlength=\"65536\" spellcheck=\"false\"></textarea></label></p>" ^
   "<p><label>Or upload a file <input type=\"file\" name=\"file\"></label></p>" ^
   "<p><button type=\"submit\">Submit</button></p></form>"
 
@@ -133,10 +133,10 @@ let hack_form c =
     | _ -> None) (submissions c) in
   if options = [] then "<p>No accepted solutions to target yet.</p>" else
   "<form method=\"post\" enctype=\"multipart/form-data\" action=\"" ^ b ^ "/hack\">" ^
-  "<p><label>Your name <input name=\"name\" required maxlength=\"32\" value=\"" ^
+  "<p><label>Your name <input name=\"name\" required maxlength=\"32\" pattern=\"[!-~]([ -~]{0,30}[!-~])?\" title=\"1 to 32 printable ASCII characters with no leading or trailing spaces\" value=\"" ^
   View.escape (receive_name ()) ^ "\"></label></p>" ^
   "<p><label>Target <select name=\"target\">" ^ String.concat "" options ^ "</select></label></p>" ^
-  "<p><label>Proposed input<br><textarea name=\"input\" rows=\"12\" cols=\"80\"></textarea></label></p>" ^
+  "<p><label>Proposed input<br><textarea name=\"input\" rows=\"12\" cols=\"80\" maxlength=\"65536\"></textarea></label></p>" ^
   "<p><label>Or upload input <input name=\"file\" type=\"file\"></label></p>" ^
   "<button>Submit hack</button></form>"
 
@@ -267,6 +267,8 @@ let route () =
   let uri = match String.index_opt uri '?' with None -> uri | Some i -> String.sub uri 0 i in
   let parts = String.split_on_char '/' uri in
   match parts with
+  | [ ""; "c"; "theme.css" ] when env "REQUEST_METHOD" = "GET" ->
+      View.send "200 OK" "text/css; charset=utf-8" (Bj.File.read "/src/web/theme.css")
   | "" :: "c" :: token :: tail when valid token ->
       let c = contest token in
       let tail = if tail = [ "" ] then [] else tail in
