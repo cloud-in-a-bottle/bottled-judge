@@ -14,7 +14,14 @@ let program : Bj.Lang.t -> string array = function Python -> [| "python3"; "main
 
 let mine p = p.[0] >= '0' && p.[0] <= '9' && (try (Unix.stat ("/proc/" ^ p)).st_uid = uid with _ -> false)
 
+let rec reap_children () =
+  match Unix.waitpid [ WNOHANG ] (-1) with
+  | 0, _ -> ()
+  | _, _ -> reap_children ()
+  | exception Unix.Unix_error (Unix.ECHILD, _, _) -> ()
+
 let rec reap n =
+  reap_children ();
   let l = List.filter mine (Array.to_list (Sys.readdir "/proc")) in
   if l <> [] then begin
     if n = 0 then failwith "leftovers";
@@ -220,58 +227,106 @@ let first_hack () =
   let files = List.filter Bj.Sub.id_ok (Array.to_list (Sys.readdir (hack_pending ()))) in
   match List.sort compare files with [] -> None | id :: _ -> Some id
 
-let apply_hack h =
-  let file = path (done_dir ()) h.Bj.Hack.target in
-  let target = Bj.Sub.read file in
-  if target.contest <> h.contest || target.problem <> h.problem then failwith "Hack target mismatch";
-  match target.result with
-  | Some r when r.verdict = "AC" ->
-      Bj.Sub.write file { target with result = Some { r with verdict = "HACKED" } }
-  | Some r when r.verdict = "HACKED" -> ()
-  | _ -> failwith "Hack target is not accepted"
-
 let private_dir () =
   let dir = path (temp ()) "hack-private" in
   if Sys.file_exists dir then remove dir;
   Unix.mkdir dir 0o700;
   dir
 
+let oracle_output h =
+  let contest = Bj.Contest.load (path (path (data ()) "contests") h.Bj.Hack.contest) in
+  let oracle = path (path contest.dir h.problem) "oracle.py" in
+  let private_files = private_dir () in
+  let input = path private_files "input" in
+  let expected = path private_files "expected" in
+  write input h.input;
+  let scratch = prepare_sandbox () in
+  let script = path scratch "oracle.py" in
+  write script (Bj.File.read oracle);
+  Unix.chown script uid uid;
+  let limits = { cpu = 5000; wall = 6000; mem = 512; nproc = 8; fsize = 1048576 } in
+  let killed, status, _, _ = sandbox limits input expected "/dev/null" scratch [| "python3"; "oracle.py" |] in
+  if killed then Error Bj.Hack.Error else match status with
+  | Unix.WEXITED 2 -> Error Bj.Hack.Invalid
+  | Unix.WEXITED 0 when regular expected -> Ok (Bj.File.read expected)
+  | _ -> Error Bj.Hack.Error
+
+let apply_hack h =
+  let marker = path (hack_done ()) (h.Bj.Hack.id ^ ".applied") in
+  if not (Sys.file_exists marker) then begin
+    let file = path (done_dir ()) h.target in
+    let target = Bj.Sub.read file in
+    if target.contest <> h.contest || target.problem <> h.problem then failwith "Hack target mismatch";
+    (match target.result with
+    | Some r when r.verdict = "AC" || r.verdict = "HACKED" -> ()
+    | _ -> failwith "Hack target is not accepted");
+    let expected = match h.expected with
+      | Some expected -> expected
+      | None ->
+          let expected = match oracle_output h with
+            | Ok expected -> expected
+            | Error _ -> failwith "Cannot recover hack oracle output" in
+          Bj.Hack.write (path (hack_done ()) h.id) { h with expected = Some expected };
+          expected in
+    let private_files = private_dir () in
+    let input = path private_files "input" in
+    let answer = path private_files "expected" in
+    write input h.input;
+    write answer expected;
+    (match target.result with
+    | Some r when r.verdict = "AC" ->
+        Bj.Sub.write file { target with result = Some { r with verdict = "HACKED" } }
+    | _ -> ());
+    let contest = Bj.Contest.load (path (path (data ()) "contests") h.contest) in
+    let problem = List.find (fun p -> p.Bj.Contest.name = h.problem) contest.problems in
+    Array.iter (fun id ->
+      if Bj.Sub.id_ok id && id <> h.target then begin
+        let file = path (done_dir ()) id in
+        let s = Bj.Sub.read file in
+        if s.contest = h.contest && s.problem = h.problem &&
+           (match s.result with Some r -> r.verdict = "AC" | None -> false) then begin
+          let scratch = prepare_sandbox () in
+          let source = path scratch (source_name s.lang) in
+          write source s.source;
+          Unix.chown source uid uid;
+          let ok, _, _, _ = build s.lang scratch in
+          if not ok then failwith "Cannot rebuild accepted submission";
+          let output = path private_files "output" in
+          (try remove output with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
+          let verdict, _, _, _ = execute problem.time problem.memory input output scratch (program s.lang) in
+          if verdict <> "OK" || not (equal_files output answer) then
+            match s.result with
+            | Some r -> Bj.Sub.write file { s with result = Some { r with verdict = "HACKED" } }
+            | None -> assert false
+        end
+      end) (Sys.readdir (done_dir ()));
+    write marker ""
+  end
+
 let judge_hack h =
   let target_file = path (done_dir ()) h.Bj.Hack.target in
-  if not (Sys.file_exists target_file) then Bj.Hack.Invalid
+  if not (Sys.file_exists target_file) then (Bj.Hack.Invalid, None)
   else
     let target = Bj.Sub.read target_file in
     if target.contest <> h.contest || target.problem <> h.problem ||
-       (match target.result with Some r -> r.verdict <> "AC" | None -> true) then Bj.Hack.Invalid
-    else begin
-      let contest = Bj.Contest.load (path (path (data ()) "contests") h.contest) in
-      let problem = List.find (fun p -> p.Bj.Contest.name = h.problem) contest.problems in
-      let oracle = path (path contest.dir problem.name) "oracle.py" in
-      let private_files = private_dir () in
-      let input = path private_files "input" in
-      let expected = path private_files "expected" in
-      write input h.input;
-      let scratch = prepare_sandbox () in
-      let script = path scratch "oracle.py" in
-      write script (Bj.File.read oracle);
-      Unix.chown script uid uid;
-      let limits = { cpu = 5000; wall = 6000; mem = 512; nproc = 8; fsize = 1048576 } in
-      let killed, status, _, _ = sandbox limits input expected "/dev/null" scratch [| "python3"; "oracle.py" |] in
-      if killed then Bj.Hack.Error
-      else match status with
-      | Unix.WEXITED 2 -> Bj.Hack.Invalid
-      | Unix.WEXITED 0 when regular expected ->
-          let scratch = prepare_sandbox () in
-          let source = path scratch (source_name target.lang) in
-          write source target.source;
-          Unix.chown source uid uid;
-          let ok, _, _, _ = build target.lang scratch in
-          if not ok then Bj.Hack.Error else
-            let output = path private_files "output" in
-            let verdict, _, _, _ = execute problem.time problem.memory input output scratch (program target.lang) in
-            if verdict = "OK" && equal_files output expected then Bj.Hack.Failed else Bj.Hack.Success
-      | _ -> Bj.Hack.Error
-    end
+       (match target.result with Some r -> r.verdict <> "AC" | None -> true) then (Bj.Hack.Invalid, None)
+    else match oracle_output h with
+    | Error outcome -> (outcome, None)
+    | Ok expected ->
+        let contest = Bj.Contest.load (path (path (data ()) "contests") h.contest) in
+        let problem = List.find (fun p -> p.Bj.Contest.name = h.problem) contest.problems in
+        let scratch = prepare_sandbox () in
+        let source = path scratch (source_name target.lang) in
+        write source target.source;
+        Unix.chown source uid uid;
+        let ok, _, _, _ = build target.lang scratch in
+        if not ok then (Bj.Hack.Error, None) else
+          let private_files = path (temp ()) "hack-private" in
+          let input = path private_files "input" in
+          let output = path private_files "output" in
+          let verdict, _, _, _ = execute problem.time problem.memory input output scratch (program target.lang) in
+          if verdict = "OK" && equal_files output (path private_files "expected") then (Bj.Hack.Failed, None)
+          else (Bj.Hack.Success, Some expected)
 
 let process_hack id =
   let file = path (hack_pending ()) id in
@@ -284,11 +339,11 @@ let process_hack id =
     let h = Bj.Hack.read file in
     let h = { h with attempts = h.attempts + 1 } in
     Bj.Hack.write file h;
-    let outcome = if h.attempts > 3 then Bj.Hack.Error else
+    let outcome, expected = if h.attempts > 3 then (Bj.Hack.Error, None) else
       try judge_hack h with ex ->
         prerr_endline (Printexc.to_string ex);
-        Bj.Hack.Error in
-    let h = { h with result = Some outcome } in
+        (Bj.Hack.Error, None) in
+    let h = { h with result = Some outcome; expected } in
     Bj.Hack.write done_file h;
     if outcome = Bj.Hack.Success then apply_hack h;
     Unix.unlink file;

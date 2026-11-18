@@ -120,6 +120,11 @@ let hacks c =
   List.sort (fun a b -> String.compare b.Bj.Hack.id a.id)
     (List.append (entries "pending") (entries "done"))
 
+let hack_result h =
+  if h.Bj.Hack.result = Some Bj.Hack.Success &&
+     not (Sys.file_exists (path (path (path (data ()) "hacks") "done") (h.id ^ ".applied")))
+  then None else h.result
+
 let hack_form c =
   let b = base c.Bj.Contest.token in
   let options = List.filter_map (fun (s : Bj.Sub.t) -> match s.result with
@@ -153,7 +158,7 @@ let post_hack (c : Bj.Contest.t) =
     fail "400 Bad Request" "Target must be another contestant's accepted submission";
   let id = Bj.Sub.id () in
   let h : Bj.Hack.t = { id; contest = s.contest; problem = s.problem; target; name;
-    at = int_of_float (Unix.gettimeofday () *. 1000.); attempts = 0; result = None; input } in
+    at = int_of_float (Unix.gettimeofday () *. 1000.); attempts = 0; result = None; input; expected = None } in
   Bj.Contest.with_lock c.dir (fun () ->
     if (Bj.Contest.load c.dir).phase <> Bj.Contest.Hacking then fail "403 Forbidden" "Hacks are not open";
     Bj.Hack.write (path (path (path (data ()) "hacks") "pending") id) h);
@@ -229,7 +234,7 @@ let get c tail =
       View.send "200 OK" markup (html "Propose a hack" (navigation c ^ hack_form c))
   | [ "hacks" ] when c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished ->
       let rows = List.map (fun (h : Bj.Hack.t) ->
-        let status = match h.result with None -> "pending" | Some r -> Bj.Hack.string_of_outcome r in
+        let status = match hack_result h with None -> "pending" | Some r -> Bj.Hack.string_of_outcome r in
         "<li>" ^ View.link (b ^ "/h/" ^ h.id) (h.name ^ " / " ^ status) ^ "</li>") (hacks c) in
       View.send "200 OK" markup (html "Hacks" (navigation c ^ "<ul>" ^ String.concat "" rows ^ "</ul>"))
   | [ "h"; id ] when c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished ->
@@ -239,8 +244,9 @@ let get c tail =
       let file = if Sys.file_exists finished then finished else path (path dir "pending") id in
       let h = try Bj.Hack.read file with _ -> fail "404 Not Found" "Hack not found" in
       if h.contest <> Filename.basename c.dir then fail "404 Not Found" "Hack not found";
-      let status = match h.result with None -> "pending" | Some r -> Bj.Hack.string_of_outcome r in
-      View.send ~headers:(if h.result = None then [ "Refresh", "3" ] else []) "200 OK" markup
+      let result = hack_result h in
+      let status = match result with None -> "pending" | Some r -> Bj.Hack.string_of_outcome r in
+      View.send ~headers:(if result = None then [ "Refresh", "3" ] else []) "200 OK" markup
         (html "Hack" (navigation c ^ "<p>" ^ View.escape (h.name ^ " / " ^ status) ^
           " against " ^ View.link (b ^ "/s/" ^ h.target) h.target ^ "</p>" ^
           "<h2>Proposed input</h2><pre>" ^ View.escape h.input ^ "</pre>"))

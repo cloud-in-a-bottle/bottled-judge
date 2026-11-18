@@ -279,7 +279,9 @@ let published_page id dir =
         if h.contest = id then Some h else None
       with _ -> None) (Array.to_list (Sys.readdir folder)) in
   let hack_rows = List.map (fun (h : Bj.Hack.t) ->
-    let result = match h.result with None -> "pending" | Some r -> Bj.Hack.string_of_outcome r in
+    let applied = path (path (path (data ()) "hacks") "done") (h.id ^ ".applied") in
+    let result = if h.result = Some Bj.Hack.Success && not (Sys.file_exists applied) then "pending"
+      else match h.result with None -> "pending" | Some r -> Bj.Hack.string_of_outcome r in
     "<li>" ^ escape (h.name ^ " → " ^ h.target ^ ": " ^ result) ^ "</li>")
     (List.append (hacks "pending") (hacks "done")) in
   page c.title ("<p>Contest link: " ^ link ("/c/" ^ c.token) ("/c/" ^ c.token) ^ "</p>" ^

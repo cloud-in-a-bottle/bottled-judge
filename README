@@ -2,7 +2,8 @@ bottled-judge
 =============
 
 Owner-defined contests have problems, hidden tests, limits and hacking
-phases. Hacks target one submission. Contestant labels are unauthenticated.
+phases. Successful hacks test every accepted solution to that problem.
+Contestant labels are unauthenticated.
 
 The judge runs on Debian 13 with Python 3.13.5, OCaml 5.3,
 GCC/g++ 14.2 (C23/C++23) and Rust 1.85 (edition 2024).
