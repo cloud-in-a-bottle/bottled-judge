@@ -365,8 +365,26 @@ let prepare () =
   access (path (data ()) "accounts") 1000 1000 0o700;
   ensure (path (data ()) "sessions") 0o700;
   access (path (data ()) "sessions") 1000 1000 0o700;
-  ensure (path (data ()) "peers") 0o700;
-  access (path (data ()) "peers") 1000 1000 0o700;
+  let keys = path (data ()) "keys" in
+  ensure keys 0o700;
+  access keys 1000 1000 0o700;
+  let pid = Unix.create_process "python3" [| "python3"; "/src/web/peer.py"; "init" |]
+    Unix.stdin Unix.stdout Unix.stderr in
+  let _, status = Unix.waitpid [] pid in
+  if status <> Unix.WEXITED 0 then failwith "Instance key initialization failed";
+  access (path keys "private") 1000 1000 0o600;
+  let old = path (data ()) "peers" in
+  if Sys.file_exists old && Sys.is_directory old then begin
+    Array.iter (fun name ->
+      let file = path old name in
+      let retired = name = ".requests.lock" ||
+        (try let fields, _ = Bj.Kv.read file in
+          String.length (Bj.Kv.get fields "key") = 64 &&
+          String.length (Bj.Kv.get fields "url") > 8
+         with _ -> false) in
+      if regular file && retired then Unix.unlink file) (Sys.readdir old);
+    if Sys.readdir old = [||] then Unix.rmdir old
+  end;
   ensure (path (data ()) "remote") 0o700;
   access (path (data ()) "remote") 1000 1000 0o700;
   ensure (pending ()) 0o700;

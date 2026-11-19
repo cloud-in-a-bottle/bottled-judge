@@ -301,13 +301,14 @@ let route () =
   match parts with
   | [ ""; "c"; "theme.css" ] when env "REQUEST_METHOD" = "GET" ->
       View.send "200 OK" "text/css; charset=utf-8" (Bj.File.read "/src/web/theme.css")
+  | [ ""; "c"; "instance-key" ] when env "REQUEST_METHOD" = "GET" -> Peer.public_key ()
   | [ ""; "c"; "join" ] -> Peer.handle_join ()
   | [ ""; "c"; page ] when List.mem page [ "signup"; "login"; "logout"; "me" ] -> Account.handle page
   | "" :: "c" :: "f" :: "v1" :: token :: tail when Account.next_token token = token && token <> "" ->
+      let c = contest token in
       let user, request, body = Peer.incoming () in
       Account.remote := Some user;
       Peer.request := (if env "REQUEST_METHOD" = "POST" then Some request else None);
-      let c = contest token in
       (match env "REQUEST_METHOD", tail with
        | "GET", _ -> get c tail
        | "POST", [ "submit" ] -> post ~fields:(Bj.Form.parse (env "CONTENT_TYPE") body) c

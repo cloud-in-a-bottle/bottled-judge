@@ -11,7 +11,7 @@ let link = View.link
 let page ?(headers = []) title body =
   View.send ~headers "200 OK" "text/html; charset=utf-8"
     (View.page title ("<nav>" ^ link "/" "Contests" ^ " | " ^ link "/users" "Users" ^
-      " | " ^ link "/peers" "Peers" ^ " | " ^ link "/c/join" "Join contest" ^ "</nav>" ^ body))
+      " | " ^ link "/c/join" "Join contest" ^ "</nav>" ^ body))
 
 let redirect target = View.send ~headers:[ "Location", target ] "303 See Other" "text/html; charset=utf-8" ""
 
@@ -148,27 +148,6 @@ let reset_user name =
   let fields = form () in
   (try Account.reset username (get fields "password") with Invalid_argument message -> bad message);
   redirect ("/users/" ^ username ^ "?reset=1")
-
-let list_peers () =
-  let entries = List.map (fun name ->
-    let fields, _ = Bj.Kv.read (Peer.peer_file name) in
-    "<li>" ^ escape name ^ " — " ^ escape (Bj.Kv.get fields "url") ^ "</li>") (Peer.list ()) in
-  page "Peers" ("<ul>" ^ String.concat "" entries ^ "</ul>" ^
-    "<form method=\"post\" enctype=\"multipart/form-data\" action=\"/peers\">" ^
-    "<p><label>Peer domain <input name=\"peer\" required></label></p>" ^
-    "<p><label>URL <input name=\"url\" required placeholder=\"https://home.example\"></label></p>" ^
-    "<p><label>Shared key <input name=\"key\" pattern=\"[0-9a-f]{64}\" placeholder=\"Leave blank to generate\"></label></p>" ^
-    "<button>Pair instance</button></form>")
-
-let add_peer () =
-  let fields = form () in
-  let name = get fields "peer" and url = get fields "url" in
-  let key = get fields "key" in
-  if Peer.name_ok name && Sys.file_exists (Peer.peer_file name) then bad "Peer already paired";
-  let key = if key = "" then Account.random 32 else key in
-  (try Peer.add name url key with Invalid_argument message -> bad message);
-  page "Peer paired" ("<p>Share this key with the owner of " ^ escape name ^
-    ". It is shown only now.</p><pre>" ^ key ^ "</pre>" ^ link "/peers" "Peers")
 
 let new_contest () =
   let title = contest_fields (form ()) in
@@ -370,8 +349,6 @@ let handle parts =
   | "GET", [ "users" ] -> list_users ()
   | "GET", [ "users"; name ] -> user_page name
   | "POST", [ "users"; name; "reset" ] -> reset_user name
-  | "GET", [ "peers" ] -> list_peers ()
-  | "POST", [ "peers" ] -> add_peer ()
   | "GET", [ "new" ] -> page "New contest" (contest_form "/new" "" "Create")
   | "POST", [ "new" ] -> new_contest ()
   | "GET", [ id ] -> view_contest id

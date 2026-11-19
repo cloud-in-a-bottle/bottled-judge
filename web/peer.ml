@@ -1,12 +1,12 @@
 let path = Filename.concat
 let env name = try Sys.getenv name with Not_found -> ""
 let data () = Sys.getenv "OPENHOST_APP_DATA_DIR"
-let peers () = path (data ()) "peers"
+let keys () = path (data ()) "keys"
 let routes () = path (data ()) "remote"
 let request : string option ref = ref None
 
 let with_request_lock f =
-  let fd = Unix.openfile (path (peers ()) ".requests.lock") [ Unix.O_CREAT; Unix.O_RDWR ] 0o600 in
+  let fd = Unix.openfile (path (keys ()) ".requests.lock") [ Unix.O_CREAT; Unix.O_RDWR ] 0o600 in
   Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
     Unix.lockf fd Unix.F_LOCK 0;
     f ())
@@ -20,23 +20,6 @@ let name_ok name =
         String.for_all (function 'a'..'z' | '0'..'9' | '-' -> true | _ -> false) label) labels
   | _ -> false
 
-let key_ok key = String.length key = 64 && String.for_all (function
-  | '0'..'9' | 'a'..'f' -> true | _ -> false) key
-
-let url_ok name url = url = "https://" ^ name ||
-  (env "JUDGE_ALLOW_HTTP_PEERS" = "1" && String.starts_with ~prefix:"http://" url &&
-   not (String.contains url '\n') && String.length url < 200)
-
-let peer_file name = path (peers ()) name
-
-let add name url key =
-  if not (name_ok name) || name = Account.domain () then invalid_arg "Invalid peer domain";
-  if not (url_ok name url) then invalid_arg "Invalid peer URL";
-  if not (key_ok key) then invalid_arg "Invalid peer key";
-  Bj.Admin_data.write (peer_file name) ("url: " ^ url ^ "\nkey: " ^ key ^ "\n\n") 0o600
-
-let list () = List.sort compare (List.filter name_ok (Array.to_list (Sys.readdir (peers ()))))
-
 let connect name token =
   if Bj.Contest.find (path (data ()) "contests") token <> None then invalid_arg "Local contest already exists";
   let file = path (routes ()) token in
@@ -45,16 +28,18 @@ let connect name token =
   end else Bj.Admin_data.write file (name ^ "\n") 0o600
 
 let join url =
-  let matches = List.filter_map (fun name ->
-    let fields, _ = Bj.Kv.read (peer_file name) in
-    let prefix = Bj.Kv.get fields "url" ^ "/c/" in
-    if not (String.starts_with ~prefix url) then None else
-      let rest = String.sub url (String.length prefix) (String.length url - String.length prefix) in
-      let token = if String.ends_with ~suffix:"/" rest then String.sub rest 0 (String.length rest - 1) else rest in
-      if Account.next_token token = token && token <> "" then Some (name, token) else None) (list ()) in
-  match matches with
-  | [ name, token ] -> name, token
-  | _ -> invalid_arg "Invalid contest URL or unpaired host"
+  let parts = String.split_on_char '/' url in
+  let scheme, host, token = match parts with
+    | [ scheme; ""; host; "c"; token ]
+    | [ scheme; ""; host; "c"; token; "" ] -> scheme, host, token
+    | _ -> invalid_arg "Invalid contest URL" in
+  let host = if scheme = "http:" && env "JUDGE_ALLOW_HTTP_PEERS" = "1" &&
+    String.ends_with ~suffix:":8080" host then
+      String.sub host 0 (String.length host - 5) else
+    if scheme = "https:" then host else invalid_arg "Invalid contest URL" in
+  if not (name_ok host) || host = Account.domain () ||
+     Account.next_token token <> token || token = "" then invalid_arg "Invalid contest URL";
+  host, token
 
 let remote token =
   let file = path (routes ()) token in
@@ -89,6 +74,11 @@ let run mode body values direct =
         value in
   let _, status = Unix.waitpid [] pid in
   response, status
+
+let public_key () =
+  let answer, status = run "public" "" [] false in
+  if status <> Unix.WEXITED 0 || String.length answer <> 64 then failwith "Instance key unavailable";
+  View.send "200 OK" "text/plain; charset=utf-8" (answer ^ "\n")
 
 let handle_join () =
   let page body = View.send "200 OK" "text/html; charset=utf-8" (View.page "Join contest" body) in

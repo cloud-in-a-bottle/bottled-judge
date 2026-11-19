@@ -6,12 +6,12 @@ phases. Successful hacks test every accepted solution to that problem.
 Contestants sign in with local accounts; submissions use their
 username@instance-domain identity.
 
-For remote contests, owners pair instances at /peers using the same
-64-character shared key on both sides. The host URL must be HTTPS and
-match its domain. A signed-in contestant pastes the host's contest URL
-at /c/join. The same contest pages then appear on their home instance,
+For remote contests, a signed-in contestant pastes the host's HTTPS
+contest URL at /c/join. The contest pages appear on their home instance,
 which signs and relays requests while the contest host stores and judges
-all work. Each instance needs its own JUDGE_DOMAIN setting; this one defaults to
+all work. Instances publish their signing keys at /c/instance-key;
+contest hosts discover keys over HTTPS, without manual pairing. Each
+instance needs its own JUDGE_DOMAIN setting; this one defaults to
 judge.1.bottle.cloud. Only test installations may use
 JUDGE_ALLOW_HTTP_PEERS=1 to connect over HTTP.
 
