@@ -297,27 +297,31 @@ let get c tail =
   | _ -> fail "404 Not Found" "Not found"
 
 let home () =
-  match Account.local () with
-  | None -> Account.redirect "/login"
-  | Some user ->
-      let entries dir label link_to =
-        Array.to_list (Sys.readdir dir) |> List.filter Bj.Contest.id_ok |>
-        List.sort (fun a b -> compare (int_of_string b) (int_of_string a)) |>
-        List.filter_map (fun id ->
-          try let c = Bj.Contest.load (path dir id) in
-            Some ("<li>" ^ View.link (link_to id) c.title ^ " (" ^ label ^ ")</li>")
-          with _ -> None) in
-      let local = entries (path (data ()) "contests") "local" (fun id -> "/contests/" ^ id) in
-      let remote = List.map (fun (host, id) ->
-        "<li>" ^ View.link ("/contests/" ^ host ^ "/" ^ id) (host ^ " #" ^ id) ^ "</li>")
-        (Account.joins user.username) in
-      let drafts = if user.admin then
-        entries (path (data ()) "drafts") "draft" Admin.manage_path else [] in
-      View.send "200 OK" markup (html "Contests" (
-        Account.navigation (Some user) ^
-        "<h2>Hosted contests</h2><ul>" ^ String.concat "" local ^ "</ul>" ^
-        "<h2>Joined contests</h2><ul>" ^ String.concat "" remote ^ "</ul>" ^
-        (if drafts = [] then "" else "<h2>Drafts</h2><ul>" ^ String.concat "" drafts ^ "</ul>")))
+  let user = Account.local () in
+  let entries dir label link_to =
+    Array.to_list (Sys.readdir dir) |> List.filter Bj.Contest.id_ok |>
+    List.sort (fun a b -> compare (int_of_string b) (int_of_string a)) |>
+    List.filter_map (fun id ->
+      try let c = Bj.Contest.load (path dir id) in
+        Some ("<li>" ^ View.link (link_to id) c.title ^ " (" ^ label ^ ")</li>")
+      with _ -> None) in
+  let local = entries (path (data ()) "contests") "local" (fun id -> "/contests/" ^ id) in
+  let remote = match user with
+    | None -> ""
+    | Some account ->
+        let links = List.map (fun (host, id) ->
+          "<li>" ^ View.link ("/contests/" ^ host ^ "/" ^ id) (host ^ " #" ^ id) ^ "</li>")
+          (Account.joins account.username) in
+        "<h2>Joined contests</h2><ul>" ^ String.concat "" links ^ "</ul>" in
+  let drafts = match user with
+    | Some account when account.admin -> entries (path (data ()) "drafts") "draft" Admin.manage_path
+    | _ -> [] in
+  View.send "200 OK" markup (html "Contests" (
+    Account.navigation user ^
+    "<h2>Hosted contests</h2>" ^
+    (if local = [] then "<p>No published contests yet.</p>"
+     else "<ul>" ^ String.concat "" local ^ "</ul>") ^
+    remote ^ (if drafts = [] then "" else "<h2>Drafts</h2><ul>" ^ String.concat "" drafts ^ "</ul>")))
 
 let route () =
   let uri = env "REQUEST_URI" in
