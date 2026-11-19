@@ -14,6 +14,7 @@ form p { margin: 9px 0; }
 input, select, textarea, button, input::file-selector-button { font: inherit; color: #24272a; background: #fff; border-radius: 0; }
 input:not([type="file"]), select, textarea, button, input::file-selector-button { border: 1px solid #a7adb0; }
 input[type="file"] { border: 0; padding: 0; background: transparent; }
+input[type="url"] { display: block; width: 100%; max-width: 720px; box-sizing: border-box; }
 textarea { display: block; width: 100%; max-width: 720px; font: 12px/1.45 monospace; }
 button, input::file-selector-button { padding: 2px 9px; background: #e9eaea; }
 button:active { border-style: inset; }
