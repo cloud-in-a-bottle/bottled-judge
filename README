@@ -1,15 +1,17 @@
 bottled-judge
 =============
 
-Owner-defined contests have problems, hidden tests, limits and hacking
+Admin-created contests have problems, hidden tests, limits and hacking
 phases. Successful hacks test every accepted solution to that problem.
-Contestants sign in with local accounts; submissions use their
+The first local signup becomes admin. Everyone uses the same sign-in and
+contest pages; admin accounts see management controls. Submissions use their
 username@instance-domain identity.
 
 For remote contests, a signed-in contestant pastes the host's HTTPS
-contest URL at /c/join. The contest pages appear on their home instance,
-which signs and relays requests while the contest host stores and judges
-all work. Instances publish their signing keys at /c/instance-key;
+contest URL at /join. Each host assigns numeric contest IDs. Joined contests
+appear on the user's account and home pages. The home instance serves the
+contest pages and relays requests; the contest host stores and judges all
+work. Instances publish their signing keys at /api/federation/v1/key;
 contest hosts discover keys over HTTPS, without manual pairing. Each
 instance needs its own JUDGE_DOMAIN setting; this one defaults to
 judge.1.bottle.cloud. Only test installations may use

@@ -2,7 +2,6 @@ let path = Filename.concat
 let env name = try Sys.getenv name with Not_found -> ""
 let data () = Sys.getenv "OPENHOST_APP_DATA_DIR"
 let keys () = path (data ()) "keys"
-let routes () = path (data ()) "remote"
 let request : string option ref = ref None
 
 let with_request_lock f =
@@ -20,30 +19,18 @@ let name_ok name =
         String.for_all (function 'a'..'z' | '0'..'9' | '-' -> true | _ -> false) label) labels
   | _ -> false
 
-let connect name token =
-  if Bj.Contest.find (path (data ()) "contests") token <> None then invalid_arg "Local contest already exists";
-  let file = path (routes ()) token in
-  if Sys.file_exists file then begin
-    if String.trim (Bj.File.read file) <> name then invalid_arg "Contest already followed"
-  end else Bj.Admin_data.write file (name ^ "\n") 0o600
-
 let join url =
   let parts = String.split_on_char '/' url in
-  let scheme, host, token = match parts with
-    | [ scheme; ""; host; "c"; token ]
-    | [ scheme; ""; host; "c"; token; "" ] -> scheme, host, token
+  let scheme, host, id = match parts with
+    | [ scheme; ""; host; "contests"; id ]
+    | [ scheme; ""; host; "contests"; id; "" ] -> scheme, host, id
     | _ -> invalid_arg "Invalid contest URL" in
   let host = if scheme = "http:" && env "JUDGE_ALLOW_HTTP_PEERS" = "1" &&
     String.ends_with ~suffix:":8080" host then
       String.sub host 0 (String.length host - 5) else
     if scheme = "https:" then host else invalid_arg "Invalid contest URL" in
-  if not (name_ok host) || host = Account.domain () ||
-     Account.next_token token <> token || token = "" then invalid_arg "Invalid contest URL";
-  host, token
-
-let remote token =
-  let file = path (routes ()) token in
-  if Sys.file_exists file then Some (String.trim (Bj.File.read file)) else None
+  if not (name_ok host && Bj.Contest.id_ok id) then invalid_arg "Invalid contest URL";
+  host, id
 
 let read_body () =
   let n = try int_of_string (env "CONTENT_LENGTH") with _ -> invalid_arg "Invalid request length" in
@@ -81,28 +68,35 @@ let public_key () =
   View.send "200 OK" "text/plain; charset=utf-8" (answer ^ "\n")
 
 let handle_join () =
-  let page body = View.send "200 OK" "text/html; charset=utf-8" (View.page "Join contest" body) in
+  let page body = View.send "200 OK" "text/html; charset=utf-8"
+    (View.page "Join contest" (Account.navigation (Account.local ()) ^ body)) in
   match env "REQUEST_METHOD", Account.local () with
-  | "GET", None -> page ("<p>" ^ View.link "/c/login" "Sign in" ^ " or " ^
-      View.link "/c/signup" "create an account" ^ " to join a contest.</p>")
+  | "GET", None -> page ("<p>" ^ View.link "/login" "Sign in" ^ " or " ^
+      View.link "/signup" "create an account" ^ " to join a contest.</p>")
   | "GET", Some user ->
-      page ("<form method=\"post\" enctype=\"multipart/form-data\" action=\"/c/join\">" ^
+      page ("<form method=\"post\" enctype=\"multipart/form-data\" action=\"/join\">" ^
         "<input type=\"hidden\" name=\"csrf\" value=\"" ^ user.csrf ^ "\">" ^
-        "<p><label>Contest URL <input type=\"url\" name=\"url\" required placeholder=\"https://judge.example/c/...\"></label></p>" ^
+        "<p><label>Contest URL <input type=\"url\" name=\"url\" required placeholder=\"https://judge.example/contests/42\"></label></p>" ^
         "<button>Join contest</button></form>")
   | "POST", Some user ->
       let fields = Bj.Form.read (env "CONTENT_TYPE") (env "CONTENT_LENGTH") in
       if not (Bj.Contest.same (Bj.Form.get fields "csrf") user.csrf) then invalid_arg "Invalid form token";
-      let name, token = join (String.trim (Bj.Form.get fields "url")) in
-      let values = [ "FED_PEER", name; "FED_METHOD", "GET";
-        "FED_PATH", "/c/f/v1/" ^ token; "FED_AUTHOR", user.author;
-        "FED_CSRF", user.csrf; "FED_REQUEST", ""; "FED_CONTENT_TYPE", "" ] in
-      let response, status = run "check" "" values false in
-      if status <> Unix.WEXITED 0 || response <> "ok" then invalid_arg "Contest link unavailable";
-      connect name token;
-      View.send ~headers:[ "Location", "/c/" ^ token ] "303 See Other" "text/html; charset=utf-8" ""
+      let name, id = join (String.trim (Bj.Form.get fields "url")) in
+      let destination = if name = Account.domain () then begin
+        if Bj.Contest.find (path (data ()) "contests") id = None then invalid_arg "Contest not found";
+        "/contests/" ^ id
+      end else begin
+        let values = [ "FED_PEER", name; "FED_METHOD", "GET";
+          "FED_PATH", "/api/federation/v1/contests/" ^ id; "FED_AUTHOR", user.author;
+          "FED_CSRF", user.csrf; "FED_REQUEST", ""; "FED_CONTENT_TYPE", "" ] in
+        let response, status = run "check" "" values false in
+        if status <> Unix.WEXITED 0 || response <> "ok" then invalid_arg "Contest link unavailable";
+        Account.add_join user name id;
+        "/contests/" ^ name ^ "/" ^ id
+      end in
+      View.send ~headers:[ "Location", destination ] "303 See Other" "text/html; charset=utf-8" ""
   | "POST", None -> View.send "401 Unauthorized" "text/html; charset=utf-8"
-      (View.page "Sign in" ("<p>" ^ View.link "/c/login" "Sign in" ^ " first.</p>"))
+      (View.page "Sign in" ("<p>" ^ View.link "/login" "Sign in" ^ " first.</p>"))
   | _ -> View.send "405 Method Not Allowed" "text/html; charset=utf-8" (View.page "Not allowed" "")
 
 let incoming () =
@@ -111,11 +105,10 @@ let incoming () =
   if response <> "ok" || status <> Unix.WEXITED 0 then invalid_arg "Invalid federation signature";
   let author = env "HTTP_X_JUDGE_AUTHOR" in
   let csrf = env "HTTP_X_JUDGE_CSRF" in
-  let account = if author = "" then None else Some { Account.author; csrf } in
+  let account = if author = "" then None else Some { Account.username = ""; author; csrf; admin = false } in
   account, env "HTTP_X_JUDGE_REQUEST", body
 
-let forward token tail =
-  let peer = match remote token with Some peer -> peer | None -> invalid_arg "Unknown remote contest" in
+let forward peer id tail =
   let method_ = env "REQUEST_METHOD" in
   if method_ <> "GET" && method_ <> "POST" then invalid_arg "Unsupported method";
   let account = Account.local () in
@@ -129,7 +122,7 @@ let forward token tail =
     if not (Bj.Sub.id_ok id) then invalid_arg "Invalid request ID";
     body, id
   end else "", "" in
-  let endpoint = "/c/f/v1/" ^ token ^
+  let endpoint = "/api/federation/v1/contests/" ^ id ^
     (if tail = [] then "" else "/" ^ String.concat "/" tail) in
   let values = [ "FED_PEER", peer; "FED_METHOD", method_;
     "FED_PATH", endpoint; "FED_AUTHOR", (match account with Some user -> user.author | None -> "");

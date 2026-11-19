@@ -8,16 +8,17 @@ let valid s = String.length s > 0 && String.for_all (function
   | 'a'..'z' | 'A'..'Z' | '0'..'9' | '-' | '_' -> true | _ -> false) s
 
 let segment s = if not (valid s) then fail "404 Not Found" "Not found" else s
-let base token = "/c/" ^ token
+let prefix = ref ""
+let base _ = !prefix
 let html title body = View.page title body
 let markup = "text/html; charset=utf-8"
 
 let error status message =
   View.send status markup (html "Error" ("<p>" ^ View.escape message ^ "</p>"))
 
-let contest token =
+let contest id =
   let root = path (data ()) "contests" in
-  match Bj.Contest.find root token with
+  match Bj.Contest.find root id with
   | None -> fail "404 Not Found" "Not found"
   | Some c -> c
 
@@ -27,26 +28,27 @@ let problem c name =
   | None -> fail "404 Not Found" "No such problem"
 
 let navigation c =
-  let b = base c.Bj.Contest.token in
-  let account = match Account.current () with
-    | Some user -> View.link "/c/me" user.author
-    | None -> View.link ("/c/login?next=" ^ c.token) "Sign in" ^ " | " ^
-        View.link ("/c/signup?next=" ^ c.token) "Sign up" in
+  let b = base c.Bj.Contest.id in
+  let manage = match Account.local () with
+    | Some user when user.admin && b = "/contests/" ^ c.id ->
+        " | " ^ View.link (b ^ "/manage") "Manage"
+    | _ -> "" in
+  Account.navigation (Account.current ()) ^
   "<nav>" ^ View.link b "Problems" ^ " | " ^ View.link (b ^ "/submit") "Submit" ^
   " | " ^ View.link (b ^ "/submissions") "My submissions" ^
-  " | " ^ View.link (b ^ "/scoreboard") "Scoreboard" ^
+  " | " ^ View.link (b ^ "/standings") "Standings" ^
   (if c.phase = Bj.Contest.Stopped || c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished
     then " | " ^ View.link (b ^ "/solutions") "Solutions" else "") ^
   (if c.phase = Bj.Contest.Hacking then " | " ^ View.link (b ^ "/hack") "Hack" else "") ^
   (if c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished
-    then " | " ^ View.link (b ^ "/hacks") "Hacks" else "") ^ " | " ^ account ^ "</nav>"
+    then " | " ^ View.link (b ^ "/hacks") "Hacks" else "") ^ manage ^ "</nav>"
 
 let submit_form (c : Bj.Contest.t) selected =
   match Account.current () with
-  | None -> "<p>" ^ View.link ("/c/login?next=" ^ c.token) "Sign in" ^
-      " or " ^ View.link ("/c/signup?next=" ^ c.token) "create an account" ^ " to submit.</p>"
+  | None -> "<p>" ^ View.link ("/login?next=" ^ String.sub !prefix 1 (String.length !prefix - 1)) "Sign in" ^
+      " or " ^ View.link "/signup" "create an account" ^ " to submit.</p>"
   | Some user ->
-  let b = base c.Bj.Contest.token in
+  let b = base c.Bj.Contest.id in
   let options = List.map (fun p ->
     let name = p.Bj.Contest.name in
     "<option value=\"" ^ View.escape name ^ "\"" ^ (if name = selected then " selected" else "") ^
@@ -136,10 +138,10 @@ let require_user () = match Account.current () with
 
 let hack_form (c : Bj.Contest.t) =
   match Account.current () with
-  | None -> "<p>" ^ View.link ("/c/login?next=" ^ c.Bj.Contest.token) "Sign in" ^
-      " or " ^ View.link ("/c/signup?next=" ^ c.token) "create an account" ^ " to hack.</p>"
+  | None -> "<p>" ^ View.link "/login" "Sign in" ^
+      " or " ^ View.link "/signup" "create an account" ^ " to hack.</p>"
   | Some user ->
-  let b = base c.Bj.Contest.token in
+  let b = base c.Bj.Contest.id in
   let options = List.filter_map (fun (s : Bj.Sub.t) -> match s.result with
     | Some r when r.verdict = "AC" && s.author <> user.author ->
         Some ("<option value=\"" ^ s.id ^ "\">" ^ View.escape (s.author ^ " / " ^ s.problem) ^ "</option>")
@@ -165,9 +167,9 @@ let post_hack ?fields (c : Bj.Contest.t) =
   let pasted = match List.assoc_opt "input" fields with Some s -> s | None -> "" in
   let input = if file <> "" then file else pasted in
   if input = "" || String.length input > 65536 then fail "400 Bad Request" "Input must be 1 to 65536 bytes";
-  let id = match !(Peer.request) with
-    | None -> Bj.Sub.id ()
-    | Some id -> if Bj.Form.get fields "request" <> id then fail "400 Bad Request" "Invalid request ID"; id in
+  let id = Bj.Form.get fields "request" in
+  if not (Bj.Sub.id_ok id) || (match !(Peer.request) with Some signed -> signed <> id | None -> false) then
+    fail "400 Bad Request" "Invalid request ID";
   Peer.with_request_lock (fun () -> Bj.Contest.with_lock c.dir (fun () ->
     let pending = path (path (path (data ()) "hacks") "pending") id in
     let done_file = path (path (path (data ()) "hacks") "done") id in
@@ -186,7 +188,7 @@ let post_hack ?fields (c : Bj.Contest.t) =
         at = int_of_float (Unix.gettimeofday () *. 1000.); attempts = 0; result = None; input; expected = None } in
       Bj.Hack.write pending h
     end));
-  View.send ~headers:[ "Location", base c.token ^ "/h/" ^ id ]
+  View.send ~headers:[ "Location", base c.id ^ "/hacks/" ^ id ]
     "303 See Other" markup ""
 
 let post ?fields (c : Bj.Contest.t) =
@@ -203,9 +205,9 @@ let post ?fields (c : Bj.Contest.t) =
   let paste = match List.assoc_opt "source" fields with Some s -> s | None -> "" in
   let source = if file <> "" then file else paste in
   if source = "" || String.length source > 65536 then fail "400 Bad Request" "Source must be between 1 and 65536 bytes";
-  let id = match !(Peer.request) with
-    | None -> Bj.Sub.id ()
-    | Some id -> if Bj.Form.get fields "request" <> id then fail "400 Bad Request" "Invalid request ID"; id in
+  let id = Bj.Form.get fields "request" in
+  if not (Bj.Sub.id_ok id) || (match !(Peer.request) with Some signed -> signed <> id | None -> false) then
+    fail "400 Bad Request" "Invalid request ID";
   let s : Bj.Sub.t = { id; contest = Filename.basename c.Bj.Contest.dir; problem = p; author = user.author; lang;
     at = int_of_float (Unix.gettimeofday () *. 1000.); attempts = 0; result = None; source } in
   let dir = path (data ()) "pending" in
@@ -220,16 +222,16 @@ let post ?fields (c : Bj.Contest.t) =
         fail "403 Forbidden" "Contest is not accepting submissions";
       Bj.Sub.write pending s
     end));
-  View.send ~headers:[ "Location", base c.token ^ "/s/" ^ id ]
+  View.send ~headers:[ "Location", base c.id ^ "/submissions/" ^ id ]
     "303 See Other" markup ""
 
 let get c tail =
-  let b = base c.Bj.Contest.token in
+  let b = base c.Bj.Contest.id in
   match tail with
   | [] ->
       let body = if c.phase = Bj.Contest.Ready then "<p>Contest has not started.</p>"
         else let problems = List.map (fun p ->
-          "<li>" ^ View.link (b ^ "/p/" ^ p.Bj.Contest.name) (p.name ^ ": " ^ p.title) ^ "</li>") c.problems in
+          "<li>" ^ View.link (b ^ "/problems/" ^ p.Bj.Contest.name) (p.name ^ ": " ^ p.title) ^ "</li>") c.problems in
           "<ul>" ^ String.concat "" problems ^ "</ul>" ^
           (match c.phase with
           | Bj.Contest.Running -> "<p>Submissions are open.</p>"
@@ -238,7 +240,7 @@ let get c tail =
           | Bj.Contest.Finished -> "<p>Contest is finished.</p>"
           | Bj.Contest.Ready -> "") in
       View.send "200 OK" markup (html c.title (navigation c ^ body))
-  | [ "p"; name ] when c.phase <> Bj.Contest.Ready ->
+  | [ "problems"; name ] when c.phase <> Bj.Contest.Ready ->
       let p = problem c (segment name) in
       let statement = Bj.File.read (path (path c.dir p.name) "statement.html") in
       View.send "200 OK" markup (html p.title (navigation c ^ statement ^
@@ -246,7 +248,7 @@ let get c tail =
   | [ "submit" ] ->
       if c.phase <> Bj.Contest.Running then fail "403 Forbidden" "Contest is not accepting submissions";
       View.send "200 OK" markup (html "Submit" (navigation c ^ submit_form c ""))
-  | [ "s"; id ] ->
+  | [ "submissions"; id ] ->
       let s, verdict, ce = submission c id in
       let reveal = c.phase <> Bj.Contest.Running && c.phase <> Bj.Contest.Ready &&
         (match s.result with Some r -> r.verdict = "AC" || r.verdict = "HACKED" | None -> false) in
@@ -257,7 +259,7 @@ let get c tail =
   | [ "solutions" ] when c.phase <> Bj.Contest.Ready && c.phase <> Bj.Contest.Running ->
       let rows = List.filter_map (fun (s : Bj.Sub.t) -> match s.result with
         | Some r when r.verdict = "AC" || r.verdict = "HACKED" ->
-            Some ("<li>" ^ View.link (b ^ "/s/" ^ s.id) (s.author ^ " / " ^ s.problem ^ " / " ^ r.verdict) ^ "</li>")
+            Some ("<li>" ^ View.link (b ^ "/submissions/" ^ s.id) (s.author ^ " / " ^ s.problem ^ " / " ^ r.verdict) ^ "</li>")
         | _ -> None) (submissions c) in
       View.send "200 OK" markup (html "Solutions" (navigation c ^ "<ul>" ^ String.concat "" rows ^ "</ul>"))
   | [ "hack" ] ->
@@ -266,9 +268,9 @@ let get c tail =
   | [ "hacks" ] when c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished ->
       let rows = List.map (fun (h : Bj.Hack.t) ->
         let status = match hack_result h with None -> "pending" | Some r -> Bj.Hack.string_of_outcome r in
-        "<li>" ^ View.link (b ^ "/h/" ^ h.id) (h.author ^ " / " ^ status) ^ "</li>") (hacks c) in
+        "<li>" ^ View.link (b ^ "/hacks/" ^ h.id) (h.author ^ " / " ^ status) ^ "</li>") (hacks c) in
       View.send "200 OK" markup (html "Hacks" (navigation c ^ "<ul>" ^ String.concat "" rows ^ "</ul>"))
-  | [ "h"; id ] when c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished ->
+  | [ "hacks"; id ] when c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished ->
       if not (Bj.Sub.id_ok id) then fail "404 Not Found" "Hack not found";
       let dir = path (data ()) "hacks" in
       let finished = path (path dir "done") id in
@@ -279,33 +281,63 @@ let get c tail =
       let status = match result with None -> "pending" | Some r -> Bj.Hack.string_of_outcome r in
       View.send ~headers:(if result = None then [ "Refresh", "3" ] else []) "200 OK" markup
         (html "Hack" (navigation c ^ "<p>" ^ View.escape (h.author ^ " / " ^ status) ^
-          " against " ^ View.link (b ^ "/s/" ^ h.target) h.target ^ "</p>" ^
+          " against " ^ View.link (b ^ "/submissions/" ^ h.target) h.target ^ "</p>" ^
           "<h2>Proposed input</h2><pre>" ^ View.escape h.input ^ "</pre>"))
   | [ "submissions" ] ->
       let rows = match Account.current () with
-        | None -> "<p>" ^ View.link ("/c/login?next=" ^ c.token) "Sign in" ^
+        | None -> "<p>" ^ View.link "/login" "Sign in" ^
             " to see your submissions.</p>"
         | Some user -> let subs = List.filter (fun s -> s.Bj.Sub.author = user.author) (submissions c) in
           "<ul>" ^ String.concat "" (List.map (fun (s : Bj.Sub.t) ->
             let verdict = match s.result with None -> "pending" | Some r -> r.verdict in
-            "<li>" ^ View.link (b ^ "/s/" ^ s.id) (s.problem ^ " / " ^ verdict) ^ "</li>") subs) ^ "</ul>" in
+            "<li>" ^ View.link (b ^ "/submissions/" ^ s.id) (s.problem ^ " / " ^ verdict) ^ "</li>") subs) ^ "</ul>" in
       View.send "200 OK" markup (html "My submissions" (navigation c ^ rows))
-  | [ "scoreboard" ] -> View.send ~headers:[ "Refresh", "10" ] "200 OK" markup
-      (html "Scoreboard" (navigation c ^ scoreboard c))
+  | [ "standings" ] -> View.send ~headers:[ "Refresh", "10" ] "200 OK" markup
+      (html "Standings" (navigation c ^ scoreboard c))
   | _ -> fail "404 Not Found" "Not found"
+
+let home () =
+  match Account.local () with
+  | None -> Account.redirect "/login"
+  | Some user ->
+      let entries dir label link_to =
+        Array.to_list (Sys.readdir dir) |> List.filter Bj.Contest.id_ok |>
+        List.sort (fun a b -> compare (int_of_string b) (int_of_string a)) |>
+        List.filter_map (fun id ->
+          try let c = Bj.Contest.load (path dir id) in
+            Some ("<li>" ^ View.link (link_to id) c.title ^ " (" ^ label ^ ")</li>")
+          with _ -> None) in
+      let local = entries (path (data ()) "contests") "local" (fun id -> "/contests/" ^ id) in
+      let remote = List.map (fun (host, id) ->
+        "<li>" ^ View.link ("/contests/" ^ host ^ "/" ^ id) (host ^ " #" ^ id) ^ "</li>")
+        (Account.joins user.username) in
+      let drafts = if user.admin then
+        entries (path (data ()) "drafts") "draft" Admin.manage_path else [] in
+      View.send "200 OK" markup (html "Contests" (
+        Account.navigation (Some user) ^
+        "<h2>Hosted contests</h2><ul>" ^ String.concat "" local ^ "</ul>" ^
+        "<h2>Joined contests</h2><ul>" ^ String.concat "" remote ^ "</ul>" ^
+        (if drafts = [] then "" else "<h2>Drafts</h2><ul>" ^ String.concat "" drafts ^ "</ul>")))
 
 let route () =
   let uri = env "REQUEST_URI" in
   let uri = match String.index_opt uri '?' with None -> uri | Some i -> String.sub uri 0 i in
   let parts = String.split_on_char '/' uri in
   match parts with
-  | [ ""; "c"; "theme.css" ] when env "REQUEST_METHOD" = "GET" ->
+  | [ ""; "" ] when env "REQUEST_METHOD" = "GET" -> home ()
+  | [ ""; "theme.css" ] when env "REQUEST_METHOD" = "GET" ->
       View.send "200 OK" "text/css; charset=utf-8" (Bj.File.read "/src/web/theme.css")
-  | [ ""; "c"; "instance-key" ] when env "REQUEST_METHOD" = "GET" -> Peer.public_key ()
-  | [ ""; "c"; "join" ] -> Peer.handle_join ()
-  | [ ""; "c"; page ] when List.mem page [ "signup"; "login"; "logout"; "me" ] -> Account.handle page
-  | "" :: "c" :: "f" :: "v1" :: token :: tail when Account.next_token token = token && token <> "" ->
-      let c = contest token in
+  | [ ""; "api"; "federation"; "v1"; "key" ] when env "REQUEST_METHOD" = "GET" -> Peer.public_key ()
+  | [ ""; "join" ] -> Peer.handle_join ()
+  | [ ""; page ] when List.mem page [ "signup"; "login"; "logout"; "account" ] -> Account.handle page
+  | "" :: "users" :: tail -> Admin.handle ("users" :: tail)
+  | [ ""; "contests" ] when env "REQUEST_METHOD" = "GET" -> Account.redirect "/"
+  | "" :: "contests" :: "new" :: tail when tail = [] -> Admin.handle [ "new" ]
+  | "" :: "contests" :: id :: "manage" :: tail when Bj.Contest.id_ok id ->
+      Admin.handle (id :: "manage" :: tail)
+  | "" :: "api" :: "federation" :: "v1" :: "contests" :: id :: tail when Bj.Contest.id_ok id ->
+      let c = contest id in
+      prefix := "/contests/" ^ Account.domain () ^ "/" ^ id;
       let user, request, body = Peer.incoming () in
       Account.remote := Some user;
       Peer.request := (if env "REQUEST_METHOD" = "POST" then Some request else None);
@@ -314,18 +346,17 @@ let route () =
        | "POST", [ "submit" ] -> post ~fields:(Bj.Form.parse (env "CONTENT_TYPE") body) c
        | "POST", [ "hack" ] -> post_hack ~fields:(Bj.Form.parse (env "CONTENT_TYPE") body) c
        | _ -> fail "405 Method Not Allowed" "Method not allowed")
-  | "" :: "c" :: token :: tail when valid token ->
+  | "" :: "contests" :: id :: tail when Bj.Contest.id_ok id ->
+      prefix := "/contests/" ^ id;
       let tail = if tail = [ "" ] then [] else tail in
-      (match Bj.Contest.find (path (data ()) "contests") token with
-       | Some c ->
-           (match env "REQUEST_METHOD", tail with
-            | "GET", _ -> get c tail
-            | "POST", [ "submit" ] -> post c
-            | "POST", [ "hack" ] -> post_hack c
-            | _ -> fail "405 Method Not Allowed" "Method not allowed")
-       | None when Account.next_token token = token && Peer.remote token <> None -> Peer.forward token tail
-       | None -> fail "404 Not Found" "Not found")
-  | "" :: tail -> Admin.handle (if tail = [ "" ] then [] else tail)
+      let c = contest id in
+      (match env "REQUEST_METHOD", tail with
+       | "GET", _ -> get c tail
+       | "POST", [ "submit" ] -> post c
+       | "POST", [ "hack" ] -> post_hack c
+       | _ -> fail "405 Method Not Allowed" "Method not allowed")
+  | "" :: "contests" :: host :: id :: tail when Peer.name_ok host && Bj.Contest.id_ok id ->
+      Peer.forward host id (if tail = [ "" ] then [] else tail)
   | _ -> fail "404 Not Found" "Not found"
 
 let () =

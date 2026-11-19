@@ -385,8 +385,8 @@ let prepare () =
       if regular file && retired then Unix.unlink file) (Sys.readdir old);
     if Sys.readdir old = [||] then Unix.rmdir old
   end;
-  ensure (path (data ()) "remote") 0o700;
-  access (path (data ()) "remote") 1000 1000 0o700;
+  ensure (path (data ()) "joined") 0o700;
+  access (path (data ()) "joined") 1000 1000 0o700;
   ensure (pending ()) 0o700;
   access (pending ()) 1000 1000 0o700;
   ensure (done_dir ()) 0o755;

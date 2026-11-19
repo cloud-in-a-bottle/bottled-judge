@@ -60,7 +60,7 @@ def endpoint(name):
 def discover(name):
     connection = endpoint(name)
     try:
-        connection.request('GET', '/c/instance-key')
+        connection.request('GET', '/api/federation/v1/key')
         response = connection.getresponse()
         value = response.read(66)
         if response.status != 200 or len(value) != 65 or not value.endswith(b'\n'):

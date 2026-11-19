@@ -12,7 +12,7 @@ let escape s =
 let link url label = "<a href=\"" ^ escape url ^ "\">" ^ escape label ^ "</a>"
 
 let page title body =
-  "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><link rel=\"stylesheet\" href=\"/c/theme.css\"><title>" ^
+  "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><link rel=\"stylesheet\" href=\"/theme.css\"><title>" ^
   escape title ^ "</title></head><body><h1>" ^ escape title ^ "</h1>" ^ body ^ "</body></html>"
 
 let send ?(headers = []) status kind body =

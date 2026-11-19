@@ -33,11 +33,8 @@ let validate data id =
   title (Kv.get header "title");
   let c = Contest.load dir in
   if c.phase <> Contest.Ready then failwith "Draft must be ready";
-  if String.length c.token <> 32 || not (String.for_all (function
-    | '0'..'9' | 'a'..'f' -> true | _ -> false) c.token) then failwith "Invalid contest link";
   if c.problems = [] then failwith "Add a problem first";
   if Sys.file_exists (published data id) then failwith "Contest already exists";
-  if Contest.find (contests data) c.token <> None then failwith "Contest link already exists";
   List.iter (fun p ->
     let folder = path dir p.Contest.name in
     title p.title;

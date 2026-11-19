@@ -1,6 +1,11 @@
 type problem = { name : string; title : string; time : int; memory : int }
 type phase = Ready | Running | Stopped | Hacking | Finished
-type t = { dir : string; title : string; token : string; phase : phase; problems : problem list }
+type t = { dir : string; title : string; id : string; phase : phase; problems : problem list }
+
+let id_ok id =
+  let n = String.length id in
+  n > 0 && n <= 15 && id.[0] <> '0' &&
+  String.for_all (function '0'..'9' -> true | _ -> false) id && int_of_string_opt id <> None
 
 let phase_of_string = function
   | "ready" -> Ready
@@ -20,12 +25,11 @@ let problem dir name =
 
 let load dir =
   let h, _ = Kv.read (Filename.concat dir "contest.txt") in
-  let token = Kv.get h "token" in
-  if String.length token <> 32 || not (String.for_all (function
-    | '0'..'9' | 'a'..'f' -> true | _ -> false) token) then failwith (dir ^ ": invalid token");
+  let id = Filename.basename dir in
+  if not (id_ok id) then failwith (dir ^ ": invalid contest ID");
   let ps = List.filter (fun p -> p.[0] <> '.' && Sys.is_directory (Filename.concat dir p))
     (List.sort compare (Array.to_list (Sys.readdir dir))) in
-  { dir; title = Kv.get h "title"; token; phase = phase_of_string (Kv.get h "phase"); problems = List.map (problem dir) ps }
+  { dir; title = Kv.get h "title"; id; phase = phase_of_string (Kv.get h "phase"); problems = List.map (problem dir) ps }
 
 let set_phase dir phase =
   let file = Filename.concat dir "contest.txt" in
@@ -44,5 +48,6 @@ let same a b =
   let rec go i acc = if i = n then acc = 0 else go (i + 1) (acc lor (Char.code a.[i] lxor Char.code b.[i])) in
   n = String.length b && go 0 0
 
-let find root token =
-  List.find_opt (fun c -> same c.token token) (List.map (fun d -> load (Filename.concat root d)) (Array.to_list (Sys.readdir root)))
+let find root id =
+  let dir = Filename.concat root id in
+  if id_ok id && Sys.file_exists (Filename.concat dir "contest.txt") then Some (load dir) else None
