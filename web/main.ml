@@ -57,6 +57,7 @@ let submit_form (c : Bj.Contest.t) selected =
   "<p>Submitting as " ^ View.escape user.author ^ ".</p>" ^
   "<input type=\"hidden\" name=\"csrf\" value=\"" ^ user.csrf ^ "\">" ^
   "<input type=\"hidden\" name=\"request\" value=\"" ^ Bj.Sub.id () ^ "\">" ^
+  (if c.phase = Bj.Contest.Finished then "<p>Practice submission: standings stay final.</p>" else "") ^
   "<p><label>Problem <select name=\"problem\">" ^ String.concat "" options ^ "</select></label></p>" ^
   "<p><label>Language <select name=\"lang\">" ^
   "<option value=\"c\">C</option><option value=\"cpp\">C++</option><option value=\"py\">Python</option>" ^
@@ -75,6 +76,8 @@ let submissions c =
       with _ -> None) names in
   List.sort (fun a b -> String.compare b.Bj.Sub.id a.id) (List.append (items "pending") (items "done"))
 
+let official c = List.filter (fun s -> not s.Bj.Sub.practice) (submissions c)
+
 let submission c id =
   if not (Bj.Sub.id_ok id) then fail "404 Not Found" "Not found";
   let done_file = path (path (data ()) "done") id in
@@ -89,7 +92,7 @@ let submission c id =
   (s, verdict, ce)
 
 let scoreboard c =
-  let subs = submissions c in
+  let subs = official c in
   let people = Hashtbl.create 32 in
   List.iter (fun s ->
     let solved, hacked = try Hashtbl.find people s.Bj.Sub.author with Not_found -> ([], []) in
@@ -145,7 +148,7 @@ let hack_form (c : Bj.Contest.t) =
   let options = List.filter_map (fun (s : Bj.Sub.t) -> match s.result with
     | Some r when r.verdict = "AC" && s.author <> user.author ->
         Some ("<option value=\"" ^ s.id ^ "\">" ^ View.escape (s.author ^ " / " ^ s.problem) ^ "</option>")
-    | _ -> None) (submissions c) in
+    | _ -> None) (official c) in
   if options = [] then "<p>No accepted solutions to target yet.</p>" else
   "<form method=\"post\" enctype=\"multipart/form-data\" action=\"" ^ b ^ "/hack\">" ^
   "<p>Hacking as " ^ View.escape user.author ^ ".</p>" ^
@@ -181,7 +184,7 @@ let post_hack ?fields (c : Bj.Contest.t) =
       if (Bj.Contest.load c.dir).phase <> Bj.Contest.Hacking then fail "403 Forbidden" "Hacks are not open";
       let target_file = path (path (data ()) "done") target in
       let s = try Bj.Sub.read target_file with _ -> fail "404 Not Found" "Target not found" in
-      if s.contest <> Filename.basename c.dir || s.author = user.author ||
+      if s.contest <> Filename.basename c.dir || s.practice || s.author = user.author ||
          (match s.result with Some r -> r.verdict <> "AC" | None -> true) then
         fail "400 Bad Request" "Target must be another contestant's accepted submission";
       let h : Bj.Hack.t = { id; contest = s.contest; problem = s.problem; target; author = user.author;
@@ -193,6 +196,7 @@ let post_hack ?fields (c : Bj.Contest.t) =
 
 let post ?fields (c : Bj.Contest.t) =
   let user = require_user () in
+  let practice = c.phase = Bj.Contest.Finished in
   let fields = match fields with Some fields -> fields | None -> try Bj.Form.read (env "CONTENT_TYPE") (env "CONTENT_LENGTH") with
     | Invalid_argument message -> fail "400 Bad Request" message
     | End_of_file -> fail "400 Bad Request" "Truncated submission" in
@@ -209,16 +213,17 @@ let post ?fields (c : Bj.Contest.t) =
   if not (Bj.Sub.id_ok id) || (match !(Peer.request) with Some signed -> signed <> id | None -> false) then
     fail "400 Bad Request" "Invalid request ID";
   let s : Bj.Sub.t = { id; contest = Filename.basename c.Bj.Contest.dir; problem = p; author = user.author; lang;
-    at = int_of_float (Unix.gettimeofday () *. 1000.); attempts = 0; result = None; source } in
+    at = int_of_float (Unix.gettimeofday () *. 1000.); attempts = 0; practice; result = None; source } in
   let dir = path (data ()) "pending" in
   Peer.with_request_lock (fun () -> Bj.Contest.with_lock c.dir (fun () ->
     let pending = path dir id and done_file = path (path (data ()) "done") id in
     if Sys.file_exists pending || Sys.file_exists done_file then begin
       let old = Bj.Sub.read (if Sys.file_exists done_file then done_file else pending) in
       if old.author <> s.author || old.contest <> s.contest || old.problem <> s.problem ||
-         old.lang <> s.lang || old.source <> s.source then fail "409 Conflict" "Request ID already used"
+         old.lang <> s.lang || old.source <> s.source then
+        fail "409 Conflict" "Request ID already used"
     end else begin
-      if (Bj.Contest.load c.dir).phase <> Bj.Contest.Running then
+      if (Bj.Contest.load c.dir).phase <> (if practice then Bj.Contest.Finished else Bj.Contest.Running) then
         fail "403 Forbidden" "Contest is not accepting submissions";
       Bj.Sub.write pending s
     end));
@@ -244,23 +249,25 @@ let get c tail =
       let p = problem c (segment name) in
       let statement = Bj.File.read (path (path c.dir p.name) "statement.html") in
       View.send "200 OK" markup (html p.title (navigation c ^ statement ^
-        (if c.phase = Bj.Contest.Running then submit_form c p.name else "")))
+        (if c.phase = Bj.Contest.Running || c.phase = Bj.Contest.Finished then submit_form c p.name else "")))
   | [ "submit" ] ->
-      if c.phase <> Bj.Contest.Running then fail "403 Forbidden" "Contest is not accepting submissions";
+      if c.phase <> Bj.Contest.Running && c.phase <> Bj.Contest.Finished then
+        fail "403 Forbidden" "Contest is not accepting submissions";
       View.send "200 OK" markup (html "Submit" (navigation c ^ submit_form c ""))
   | [ "submissions"; id ] ->
       let s, verdict, ce = submission c id in
       let reveal = c.phase <> Bj.Contest.Running && c.phase <> Bj.Contest.Ready &&
         (match s.result with Some r -> r.verdict = "AC" || r.verdict = "HACKED" | None -> false) in
       View.send ~headers:(if s.result = None then [ "Refresh", "3" ] else []) "200 OK" markup
-        (html "Submission" (navigation c ^ "<p>" ^ View.escape (s.author ^ " / " ^ s.problem ^ " / " ^ verdict) ^ "</p>" ^
+        (html "Submission" (navigation c ^ "<p>" ^ View.escape (s.author ^ " / " ^ s.problem ^
+          " / " ^ (if s.practice then "practice / " else "") ^ verdict) ^ "</p>" ^
           (if ce = "" then "" else "<pre>" ^ View.escape ce ^ "</pre>") ^
           (if reveal then "<h2>Source</h2><pre>" ^ View.escape s.source ^ "</pre>" else "")))
   | [ "solutions" ] when c.phase <> Bj.Contest.Ready && c.phase <> Bj.Contest.Running ->
       let rows = List.filter_map (fun (s : Bj.Sub.t) -> match s.result with
         | Some r when r.verdict = "AC" || r.verdict = "HACKED" ->
             Some ("<li>" ^ View.link (b ^ "/submissions/" ^ s.id) (s.author ^ " / " ^ s.problem ^ " / " ^ r.verdict) ^ "</li>")
-        | _ -> None) (submissions c) in
+        | _ -> None) (official c) in
       View.send "200 OK" markup (html "Solutions" (navigation c ^ "<ul>" ^ String.concat "" rows ^ "</ul>"))
   | [ "hack" ] ->
       if c.phase <> Bj.Contest.Hacking then fail "403 Forbidden" "Hacks are not open";
@@ -290,7 +297,8 @@ let get c tail =
         | Some user -> let subs = List.filter (fun s -> s.Bj.Sub.author = user.author) (submissions c) in
           "<ul>" ^ String.concat "" (List.map (fun (s : Bj.Sub.t) ->
             let verdict = match s.result with None -> "pending" | Some r -> r.verdict in
-            "<li>" ^ View.link (b ^ "/submissions/" ^ s.id) (s.problem ^ " / " ^ verdict) ^ "</li>") subs) ^ "</ul>" in
+            "<li>" ^ View.link (b ^ "/submissions/" ^ s.id)
+              (s.problem ^ " / " ^ (if s.practice then "practice / " else "") ^ verdict) ^ "</li>") subs) ^ "</ul>" in
       View.send "200 OK" markup (html "My submissions" (navigation c ^ rows))
   | [ "standings" ] -> View.send ~headers:[ "Refresh", "10" ] "200 OK" markup
       (html "Standings" (navigation c ^ scoreboard c))

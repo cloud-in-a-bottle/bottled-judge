@@ -136,12 +136,26 @@ let equal_files a b =
   | result -> close_in x; close_in y; result
   | exception ex -> close_in_noerr x; close_in_noerr y; raise ex
 
+let applied_cases contest problem =
+  let folder = path (path (data ()) "hacks") "done" in
+  Array.to_list (Sys.readdir folder) |> List.filter Bj.Sub.id_ok |> List.sort compare |>
+  List.filter_map (fun id ->
+    if not (Sys.file_exists (path folder (id ^ ".applied"))) then None else
+    let h = Bj.Hack.read (path folder id) in
+    if h.contest <> contest || h.problem <> problem || h.result <> Some Bj.Hack.Success then None
+    else match h.expected with Some answer -> Some (h.input, answer) | None -> failwith "Hack answer missing")
+
 let judge_submission s =
   let contest_dir = path (path (data ()) "contests") s.Bj.Sub.contest in
   let contest = Bj.Contest.load contest_dir in
   let problem = List.find (fun p -> p.Bj.Contest.name = s.problem) contest.problems in
   let test_dir = path (path contest.dir problem.name) "tests" in
-  let cases = Bj.Test_set.numbers test_dir in
+  let numbers = Bj.Test_set.numbers test_dir in
+  let cases = List.map (fun n ->
+    (n, `File (path test_dir (string_of_int n ^ ".in"), path test_dir (string_of_int n ^ ".out")))) numbers in
+  let first_extra = List.length numbers + 1 in
+  let extras = if s.practice then List.mapi (fun i (input, answer) ->
+    (first_extra + i, `Hack (input, answer))) (applied_cases s.contest s.problem) else [] in
   let dir = prepare_sandbox () in
   let source = path dir (source_name s.lang) in
   write source s.source;
@@ -151,17 +165,23 @@ let judge_submission s =
   else begin
     let rec check cpu = function
       | [] -> ({ Bj.Sub.verdict = "AC"; test = 0; cpu }, None)
-      | n :: rest ->
-          let input = path test_dir (string_of_int n ^ ".in") in
-          let expected = path test_dir (string_of_int n ^ ".out") in
+      | (n, case) :: rest ->
+          let input, matches = match case with
+            | `File (input, expected) -> input, (fun output -> equal_files output expected)
+            | `Hack (text, expected) ->
+                let input = path dir "hack-input" in
+                write input text;
+                Unix.chown input uid uid;
+                input, (fun output -> (Unix.stat output).st_size = String.length expected &&
+                  Bj.File.read output = expected) in
           let output = path dir "out" in
           (try remove output with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
           let verdict, time, _, _ = execute problem.time problem.memory input output dir (program s.lang) in
-          let verdict = if verdict = "OK" then (if equal_files output expected then "AC" else "WA") else verdict in
+          let verdict = if verdict = "OK" then (if matches output then "AC" else "WA") else verdict in
           let cpu = cpu + time in
           if verdict = "AC" then check cpu rest else ({ Bj.Sub.verdict; test = n; cpu }, None)
     in
-    check 0 cases
+    check 0 (cases @ extras)
   end
 
 let pending () = path (data ()) "pending"
@@ -256,7 +276,8 @@ let apply_hack h =
   if not (Sys.file_exists marker) then begin
     let file = path (done_dir ()) h.target in
     let target = Bj.Sub.read file in
-    if target.contest <> h.contest || target.problem <> h.problem then failwith "Hack target mismatch";
+    if target.contest <> h.contest || target.problem <> h.problem || target.practice then
+      failwith "Hack target mismatch";
     (match target.result with
     | Some r when r.verdict = "AC" || r.verdict = "HACKED" -> ()
     | _ -> failwith "Hack target is not accepted");
@@ -278,7 +299,7 @@ let apply_hack h =
       if Bj.Sub.id_ok id && id <> h.target then begin
         let file = path (done_dir ()) id in
         let s = Bj.Sub.read file in
-        if s.contest = h.contest && s.problem = h.problem &&
+        if s.contest = h.contest && s.problem = h.problem && not s.practice &&
            (match s.result with Some r -> r.verdict = "AC" | None -> false) then begin
           let scratch = prepare_sandbox () in
           let source = path scratch (source_name s.lang) in
@@ -303,7 +324,7 @@ let judge_hack h =
   if not (Sys.file_exists target_file) then (Bj.Hack.Invalid, None)
   else
     let target = Bj.Sub.read target_file in
-    if target.contest <> h.contest || target.problem <> h.problem ||
+    if target.contest <> h.contest || target.problem <> h.problem || target.practice ||
        (match target.result with Some r -> r.verdict <> "AC" | None -> true) then (Bj.Hack.Invalid, None)
     else match oracle_output h with
     | Error outcome -> (outcome, None)

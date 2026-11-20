@@ -3,6 +3,8 @@ bottled-judge
 
 Admin-created contests have problems, hidden tests, limits and hacking
 phases. Successful hacks test every accepted solution to that problem.
+After a contest finishes, submissions become practice: they run the hidden
+tests and applied successful hacks without changing contest standings.
 The first local signup becomes admin. Everyone uses the same sign-in and
 contest pages; admin accounts see management controls. Submissions use their
 username@instance-domain identity.

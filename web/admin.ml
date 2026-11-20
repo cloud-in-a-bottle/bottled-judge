@@ -259,6 +259,18 @@ let hack_readiness id c =
         Bj.Sub.id_ok name && (Bj.Sub.read (path pending name)).contest = id) (Sys.readdir pending) in
       if waiting then Some "Wait for all accepted submissions to be judged" else None
 
+let finish_readiness id =
+  let hacks = path (data ()) "hacks" in
+  let pending = path hacks "pending" and done_dir = path hacks "done" in
+  let waiting = Array.exists (fun name ->
+    Bj.Sub.id_ok name && (Bj.Hack.read (path pending name)).contest = id) (Sys.readdir pending) in
+  let applying = Array.exists (fun name ->
+    if not (Bj.Sub.id_ok name) then false else
+    let h = Bj.Hack.read (path done_dir name) in
+    h.contest = id && h.result = Some Bj.Hack.Success &&
+    not (Sys.file_exists (path done_dir (name ^ ".applied")))) (Sys.readdir done_dir) in
+  if waiting || applying then fail "409 Conflict" "Wait for hacks to finish"
+
 let transition id expected next =
   let dir = Bj.Admin_data.published (data ()) (valid_id id) in
   if not (Sys.file_exists dir) then fail "404 Not Found" "Unknown contest";
@@ -267,6 +279,7 @@ let transition id expected next =
     if c.phase <> expected then fail "409 Conflict" "Contest phase has changed";
     if next = Bj.Contest.Hacking then (match hack_readiness id c with
       | None -> () | Some message -> fail "409 Conflict" message);
+    if next = Bj.Contest.Finished then finish_readiness id;
     Bj.Contest.set_phase dir next);
   redirect (manage_path id)
 
@@ -285,7 +298,8 @@ let published_page id dir =
   let rows = List.map (fun (s : Bj.Sub.t) ->
     let status = match s.result with None -> "pending" | Some r -> r.verdict in
     "<tr><td>" ^ link (manage_path id ^ "/s/" ^ s.id) s.id ^ "</td><td>" ^ escape s.author ^
-    "</td><td>" ^ escape s.problem ^ "</td><td>" ^ escape status ^ "</td></tr>") recent in
+    "</td><td>" ^ escape s.problem ^ "</td><td>" ^ escape status ^
+    (if s.practice then " (practice)" else "") ^ "</td></tr>") recent in
   let problems = List.map (fun p -> "<li>" ^ escape (p.Bj.Contest.name ^ ": " ^ p.title) ^ "</li>") c.problems in
   let phase, action = match c.phase with
     | Bj.Contest.Ready -> "Ready", post_button (manage_path id ^ "/start") "Start contest"
@@ -310,7 +324,9 @@ let published_page id dir =
     (List.append (hacks "pending") (hacks "done")) in
   page c.title ("<p>Contest link: " ^ link (contest_path id) (contest_path id) ^ "</p>" ^
     "<p>" ^ phase ^ "</p>" ^ action ^
-    "<p>" ^ string_of_int (List.length all) ^ " submissions; " ^
+    "<p>" ^ string_of_int (List.length (List.filter (fun s -> not s.Bj.Sub.practice) all)) ^
+    " official submissions; " ^
+    string_of_int (List.length (List.filter (fun s -> s.Bj.Sub.practice) all)) ^ " practice; " ^
     string_of_int (List.length (List.filter (fun s -> s.Bj.Sub.result = None) all)) ^ " pending.</p>" ^
     "<h2>Problems</h2><ol>" ^ String.concat "" problems ^ "</ol><h2>Recent submissions</h2>" ^
     "<table><tr><th>ID</th><th>Name</th><th>Problem</th><th>Verdict</th></tr>" ^
@@ -330,7 +346,8 @@ let view_submission id sid =
   let error = if Sys.file_exists ce then
     "<h2>Compiler output</h2><pre>" ^ escape (Bj.File.read ce) ^ "</pre>" else "" in
   page "Submission" ("<p>" ^ link (manage_path id) "Back to contest" ^ "</p>" ^
-    "<p>" ^ escape (s.author ^ " / " ^ s.problem ^ " / " ^ result) ^ "</p>" ^
+    "<p>" ^ escape (s.author ^ " / " ^ s.problem ^ " / " ^
+      (if s.practice then "practice / " else "") ^ result) ^ "</p>" ^
     "<h2>Source</h2><pre>" ^ escape s.source ^ "</pre>" ^ error)
 
 let view_contest id =
