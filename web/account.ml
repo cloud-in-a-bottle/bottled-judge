@@ -153,7 +153,8 @@ let users () =
   List.sort String.compare (List.filter username_ok (Array.to_list (Sys.readdir (accounts ()))))
 
 let navigation user =
-  "<nav>" ^ View.link "/" "Contests" ^ " | " ^ View.link "/join" "Join contest" ^
+  "<nav>" ^ View.link "/" "Contests" ^ " | " ^ View.link "/problemset" "Problemset" ^
+  " | " ^ View.link "/join" "Join contest" ^
   (match user with
   | None -> " | " ^ View.link "/login" "Sign in" ^ " | " ^ View.link "/signup" "Sign up"
   | Some account -> " | " ^ View.link "/account" account.author ^

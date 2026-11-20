@@ -296,6 +296,31 @@ let get c tail =
       (html "Standings" (navigation c ^ scoreboard c))
   | _ -> fail "404 Not Found" "Not found"
 
+let problemset phase =
+  let root = path (data ()) "contests" in
+  let contests = Array.to_list (Sys.readdir root) |> List.filter_map (fun id ->
+    if not (Bj.Contest.id_ok id) then None else
+    try Some (Bj.Contest.load (path root id)) with _ -> None) in
+  let contests = List.sort (fun a b -> compare (int_of_string b.Bj.Contest.id) (int_of_string a.id)) contests in
+  let rows = List.concat_map (fun c ->
+    if c.Bj.Contest.phase = Bj.Contest.Ready ||
+       (phase <> "all" && Bj.Contest.string_of_phase c.phase <> phase) then []
+    else List.map (fun p ->
+      let problem = "/contests/" ^ c.id ^ "/problems/" ^ p.Bj.Contest.name in
+      "<tr><td>" ^ View.link problem (c.id ^ String.uppercase_ascii p.name) ^
+      "</td><td>" ^ View.link problem p.title ^ "</td><td>" ^
+      View.link ("/contests/" ^ c.id) (c.title ^ " (#" ^ c.id ^ ")") ^
+      "</td><td>" ^ View.escape (String.capitalize_ascii (Bj.Contest.string_of_phase c.phase)) ^
+      "</td></tr>") c.problems) contests in
+  let filters = "<p>Show: " ^ View.link "/problemset" "All" ^ " | " ^
+    View.link "/problemset/running" "Running" ^ " | " ^
+    View.link "/problemset/finished" "Finished" ^ "</p>" in
+  View.send "200 OK" markup (html "Problemset" (Account.navigation (Account.local ()) ^
+    "<h2>Problemset</h2>" ^ filters ^
+    (if rows = [] then "<p>No visible problems yet.</p>" else
+      "<table><tr><th>ID</th><th>Problem</th><th>Contest</th><th>Phase</th></tr>" ^
+      String.concat "" rows ^ "</table>")))
+
 let home () =
   let user = Account.local () in
   let entries dir label link_to =
@@ -329,6 +354,9 @@ let route () =
   let parts = String.split_on_char '/' uri in
   match parts with
   | [ ""; "" ] when env "REQUEST_METHOD" = "GET" -> home ()
+  | [ ""; "problemset" ] when env "REQUEST_METHOD" = "GET" -> problemset "all"
+  | [ ""; "problemset"; phase ] when env "REQUEST_METHOD" = "GET" &&
+      List.mem phase [ "running"; "finished" ] -> problemset phase
   | [ ""; "theme.css" ] when env "REQUEST_METHOD" = "GET" ->
       View.send "200 OK" "text/css; charset=utf-8" (Bj.File.read "/src/web/theme.css")
   | [ ""; "api"; "federation"; "v1"; "key" ] when env "REQUEST_METHOD" = "GET" -> Peer.public_key ()
