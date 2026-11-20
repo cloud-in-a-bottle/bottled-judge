@@ -27,21 +27,25 @@ let problem c name =
   | Some p -> p
   | None -> fail "404 Not Found" "No such problem"
 
-let navigation c =
+let navigation active c =
   let b = base c.Bj.Contest.id in
+  let link name target =
+    "<a href=\"" ^ View.escape target ^ "\"" ^
+    (if active = name then " class=\"current\"" else "") ^ ">" ^ name ^ "</a>" in
   let manage = match Account.local () with
     | Some user when user.admin && b = "/contests/" ^ c.id ->
-        " | " ^ View.link (b ^ "/manage") "Manage"
-    | _ -> "" in
-  Account.navigation (Account.current ()) ^
-  "<nav>" ^ View.link b "Problems" ^ " | " ^ View.link (b ^ "/submit") "Submit" ^
-  " | " ^ View.link (b ^ "/submissions") "My submissions" ^
-  " | " ^ View.link (b ^ "/standings") "Standings" ^
-  (if c.phase = Bj.Contest.Stopped || c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished
-    then " | " ^ View.link (b ^ "/solutions") "Solutions" else "") ^
-  (if c.phase = Bj.Contest.Hacking then " | " ^ View.link (b ^ "/hack") "Hack" else "") ^
-  (if c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished
-    then " | " ^ View.link (b ^ "/hacks") "Hacks" else "") ^ manage ^ "</nav>"
+        [ "Manage", b ^ "/manage" ]
+    | _ -> [] in
+  let past = List.mem c.phase [ Bj.Contest.Stopped; Bj.Contest.Hacking; Bj.Contest.Finished ] in
+  let links = [ "Problems", b; "Submit", b ^ "/submit";
+    "My submissions", b ^ "/submissions"; "Standings", b ^ "/standings" ] @
+    (if past then [ "Solutions", b ^ "/solutions" ] else []) @
+    (if c.phase = Bj.Contest.Hacking then [ "Hack", b ^ "/hack" ] else []) @
+    (if c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished
+      then [ "Hacks", b ^ "/hacks" ] else []) @ manage in
+  "<div class=\"contest-navigation\">" ^ Account.navigation (Account.current ()) ^
+  "<nav class=\"contest-nav\">" ^ String.concat "" (List.map (fun (name, target) -> link name target) links) ^
+  "</nav></div>"
 
 let submit_form (c : Bj.Contest.t) selected =
   match Account.current () with
@@ -244,22 +248,22 @@ let get c tail =
           | Bj.Contest.Hacking -> "<p>Hacks are open.</p>"
           | Bj.Contest.Finished -> "<p>Contest is finished.</p>"
           | Bj.Contest.Ready -> "") in
-      View.send "200 OK" markup (html c.title (navigation c ^ body))
+      View.send "200 OK" markup (html c.title (navigation "Problems" c ^ body))
   | [ "problems"; name ] when c.phase <> Bj.Contest.Ready ->
       let p = problem c (segment name) in
       let statement = Bj.File.read (path (path c.dir p.name) "statement.html") in
-      View.send "200 OK" markup (html p.title (navigation c ^ statement ^
+      View.send "200 OK" markup (html p.title (navigation "Problems" c ^ statement ^
         (if c.phase = Bj.Contest.Running || c.phase = Bj.Contest.Finished then submit_form c p.name else "")))
   | [ "submit" ] ->
       if c.phase <> Bj.Contest.Running && c.phase <> Bj.Contest.Finished then
         fail "403 Forbidden" "Contest is not accepting submissions";
-      View.send "200 OK" markup (html "Submit" (navigation c ^ submit_form c ""))
+      View.send "200 OK" markup (html "Submit" (navigation "Submit" c ^ submit_form c ""))
   | [ "submissions"; id ] ->
       let s, verdict, ce = submission c id in
       let reveal = c.phase <> Bj.Contest.Running && c.phase <> Bj.Contest.Ready &&
         (match s.result with Some r -> r.verdict = "AC" || r.verdict = "HACKED" | None -> false) in
       View.send ~headers:(if s.result = None then [ "Refresh", "3" ] else []) "200 OK" markup
-        (html "Submission" (navigation c ^ "<p>" ^ View.escape (s.author ^ " / " ^ s.problem ^
+        (html "Submission" (navigation "" c ^ "<p>" ^ View.escape (s.author ^ " / " ^ s.problem ^
           " / " ^ (if s.practice then "practice / " else "") ^ verdict) ^ "</p>" ^
           (if ce = "" then "" else "<pre>" ^ View.escape ce ^ "</pre>") ^
           (if reveal then "<h2>Source</h2><pre>" ^ View.escape s.source ^ "</pre>" else "")))
@@ -268,15 +272,15 @@ let get c tail =
         | Some r when r.verdict = "AC" || r.verdict = "HACKED" ->
             Some ("<li>" ^ View.link (b ^ "/submissions/" ^ s.id) (s.author ^ " / " ^ s.problem ^ " / " ^ r.verdict) ^ "</li>")
         | _ -> None) (official c) in
-      View.send "200 OK" markup (html "Solutions" (navigation c ^ "<ul>" ^ String.concat "" rows ^ "</ul>"))
+      View.send "200 OK" markup (html "Solutions" (navigation "Solutions" c ^ "<ul>" ^ String.concat "" rows ^ "</ul>"))
   | [ "hack" ] ->
       if c.phase <> Bj.Contest.Hacking then fail "403 Forbidden" "Hacks are not open";
-      View.send "200 OK" markup (html "Propose a hack" (navigation c ^ hack_form c))
+      View.send "200 OK" markup (html "Propose a hack" (navigation "Hack" c ^ hack_form c))
   | [ "hacks" ] when c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished ->
       let rows = List.map (fun (h : Bj.Hack.t) ->
         let status = match hack_result h with None -> "pending" | Some r -> Bj.Hack.string_of_outcome r in
         "<li>" ^ View.link (b ^ "/hacks/" ^ h.id) (h.author ^ " / " ^ status) ^ "</li>") (hacks c) in
-      View.send "200 OK" markup (html "Hacks" (navigation c ^ "<ul>" ^ String.concat "" rows ^ "</ul>"))
+      View.send "200 OK" markup (html "Hacks" (navigation "Hacks" c ^ "<ul>" ^ String.concat "" rows ^ "</ul>"))
   | [ "hacks"; id ] when c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished ->
       if not (Bj.Sub.id_ok id) then fail "404 Not Found" "Hack not found";
       let dir = path (data ()) "hacks" in
@@ -287,7 +291,7 @@ let get c tail =
       let result = hack_result h in
       let status = match result with None -> "pending" | Some r -> Bj.Hack.string_of_outcome r in
       View.send ~headers:(if result = None then [ "Refresh", "3" ] else []) "200 OK" markup
-        (html "Hack" (navigation c ^ "<p>" ^ View.escape (h.author ^ " / " ^ status) ^
+        (html "Hack" (navigation "Hacks" c ^ "<p>" ^ View.escape (h.author ^ " / " ^ status) ^
           " against " ^ View.link (b ^ "/submissions/" ^ h.target) h.target ^ "</p>" ^
           "<h2>Proposed input</h2><pre>" ^ View.escape h.input ^ "</pre>"))
   | [ "submissions" ] ->
@@ -299,9 +303,9 @@ let get c tail =
             let verdict = match s.result with None -> "pending" | Some r -> r.verdict in
             "<li>" ^ View.link (b ^ "/submissions/" ^ s.id)
               (s.problem ^ " / " ^ (if s.practice then "practice / " else "") ^ verdict) ^ "</li>") subs) ^ "</ul>" in
-      View.send "200 OK" markup (html "My submissions" (navigation c ^ rows))
+      View.send "200 OK" markup (html "My submissions" (navigation "My submissions" c ^ rows))
   | [ "standings" ] -> View.send ~headers:[ "Refresh", "10" ] "200 OK" markup
-      (html "Standings" (navigation c ^ scoreboard c))
+      (html "Standings" (navigation "Standings" c ^ scoreboard c))
   | _ -> fail "404 Not Found" "Not found"
 
 let problemset phase =

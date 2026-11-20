@@ -7,6 +7,11 @@ a { color: #355688; }
 nav { margin-bottom: 18px; padding: 5px 9px; border: 1px solid #a7adb0; background: #ebedee; color: #24272a; }
 nav a { color: #24272a; font-size: 12px; font-weight: bold; text-transform: uppercase; text-decoration: none; }
 nav a:hover { text-decoration: underline; }
+.contest-navigation { margin-top: -6px; }
+.contest-navigation > nav:first-child { margin-bottom: 8px; }
+.contest-nav { display: flex; flex-wrap: wrap; gap: 3px 5px; align-items: flex-start; padding: 0; border: 0; background: transparent; margin-bottom: 14px; }
+.contest-nav a { box-sizing: border-box; display: inline-flex; align-items: center; height: 24px; padding: 2px 5px; border: 2px solid transparent; white-space: nowrap; }
+.contest-nav a.current { border-bottom-color: #355688; }
 ul, ol { padding-left: 24px; }
 li { margin: 3px 0; }
 form { margin: 14px 0; padding: 8px 10px; border: 1px solid #a7adb0; background: #fbfcfc; }
