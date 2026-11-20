@@ -27,25 +27,7 @@ let problem c name =
   | Some p -> p
   | None -> fail "404 Not Found" "No such problem"
 
-let navigation active c =
-  let b = base c.Bj.Contest.id in
-  let link name target =
-    "<a href=\"" ^ View.escape target ^ "\"" ^
-    (if active = name then " class=\"current\"" else "") ^ ">" ^ name ^ "</a>" in
-  let manage = match Account.local () with
-    | Some user when user.admin && b = "/contests/" ^ c.id ->
-        [ "Manage", b ^ "/manage" ]
-    | _ -> [] in
-  let past = List.mem c.phase [ Bj.Contest.Stopped; Bj.Contest.Hacking; Bj.Contest.Finished ] in
-  let links = [ "Problems", b; "Submit", b ^ "/submit";
-    "My submissions", b ^ "/submissions"; "Standings", b ^ "/standings" ] @
-    (if past then [ "Solutions", b ^ "/solutions" ] else []) @
-    (if c.phase = Bj.Contest.Hacking then [ "Hack", b ^ "/hack" ] else []) @
-    (if c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished
-      then [ "Hacks", b ^ "/hacks" ] else []) @ manage in
-  "<div class=\"contest-navigation\">" ^ Account.navigation (Account.current ()) ^
-  "<nav class=\"contest-nav\">" ^ String.concat "" (List.map (fun (name, target) -> link name target) links) ^
-  "</nav></div>"
+let navigation active c = Account.contest_navigation (base c.Bj.Contest.id) active c
 
 let submit_form (c : Bj.Contest.t) selected =
   match Account.current () with

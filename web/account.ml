@@ -161,6 +161,25 @@ let navigation user =
       (if account.admin then " | " ^ View.link "/contests/new" "Create contest" ^
         " | " ^ View.link "/users" "Manage users" else "")) ^ "</nav>"
 
+let contest_navigation base active (c : Bj.Contest.t) =
+  let link name target =
+    "<a href=\"" ^ View.escape target ^ "\"" ^
+    (if active = name then " class=\"current\"" else "") ^ ">" ^ name ^ "</a>" in
+  let manage = match local () with
+    | Some user when user.admin && base = "/contests/" ^ c.id ->
+        [ "Manage", base ^ "/manage" ]
+    | _ -> [] in
+  let past = List.mem c.phase [ Bj.Contest.Stopped; Bj.Contest.Hacking; Bj.Contest.Finished ] in
+  let links = [ "Problems", base; "Submit", base ^ "/submit";
+    "My submissions", base ^ "/submissions"; "Standings", base ^ "/standings" ] @
+    (if past then [ "Solutions", base ^ "/solutions" ] else []) @
+    (if c.phase = Bj.Contest.Hacking then [ "Hack", base ^ "/hack" ] else []) @
+    (if c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished
+      then [ "Hacks", base ^ "/hacks" ] else []) @ manage in
+  "<div class=\"contest-navigation\">" ^ navigation (current ()) ^
+  "<nav class=\"contest-nav\">" ^ String.concat "" (List.map (fun (name, target) -> link name target) links) ^
+  "</nav></div>"
+
 let joins username =
   let file = path (joined ()) username in
   if not (Sys.file_exists file) then [] else

@@ -16,9 +16,12 @@ let admin () = match Account.local () with
 
 let csrf () = "<input type=\"hidden\" name=\"csrf\" value=\"" ^ (admin ()).csrf ^ "\">"
 
-let page ?(headers = []) title body =
+let page ?(headers = []) ?contest title body =
+  let nav = match contest with
+    | None -> Account.navigation (Account.local ())
+    | Some c -> Account.contest_navigation (contest_path c.Bj.Contest.id) "Manage" c in
   View.send ~headers "200 OK" "text/html; charset=utf-8"
-    (View.page title (Account.navigation (Account.local ()) ^ body))
+    (View.page title (nav ^ body))
 
 let redirect target = View.send ~headers:[ "Location", target ] "303 See Other" "text/html; charset=utf-8" ""
 
@@ -322,7 +325,7 @@ let published_page id dir =
       else match h.result with None -> "pending" | Some r -> Bj.Hack.string_of_outcome r in
     "<li>" ^ escape (h.author ^ " → " ^ h.target ^ ": " ^ result) ^ "</li>")
     (List.append (hacks "pending") (hacks "done")) in
-  page c.title ("<p>Contest link: " ^ link (contest_path id) (contest_path id) ^ "</p>" ^
+  page ~contest:c c.title ("<p>Contest link: " ^ link (contest_path id) (contest_path id) ^ "</p>" ^
     "<p>" ^ phase ^ "</p>" ^ action ^
     "<p>" ^ string_of_int (List.length (List.filter (fun s -> not s.Bj.Sub.practice) all)) ^
     " official submissions; " ^
@@ -345,8 +348,8 @@ let view_submission id sid =
   let ce = path (path (data ()) "done") (sid ^ ".ce") in
   let error = if Sys.file_exists ce then
     "<h2>Compiler output</h2><pre>" ^ escape (Bj.File.read ce) ^ "</pre>" else "" in
-  page "Submission" ("<p>" ^ link (manage_path id) "Back to contest" ^ "</p>" ^
-    "<p>" ^ escape (s.author ^ " / " ^ s.problem ^ " / " ^
+  let c = Bj.Contest.load (Bj.Admin_data.published (data ()) id) in
+  page ~contest:c "Submission" ("<p>" ^ escape (s.author ^ " / " ^ s.problem ^ " / " ^
       (if s.practice then "practice / " else "") ^ result) ^ "</p>" ^
     "<h2>Source</h2><pre>" ^ escape s.source ^ "</pre>" ^ error)
 
