@@ -12,9 +12,23 @@ let prefix = ref ""
 let base _ = !prefix
 let html title body = View.page title body
 let markup = "text/html; charset=utf-8"
+let error_contest : (Bj.Contest.t * string * string list) option ref = ref None
+
+let active = function
+  | [] | [ "problems"; _ ] -> "Problems"
+  | [ "submit" ] -> "Submit"
+  | "submissions" :: _ -> "My submissions"
+  | [ "standings" ] -> "Standings"
+  | [ "solutions" ] -> "Solutions"
+  | [ "hack" ] -> "Hack"
+  | "hacks" :: _ -> "Hacks"
+  | _ -> ""
 
 let error status message =
-  View.send status markup (html "Error" ("<p>" ^ View.escape message ^ "</p>"))
+  let nav = match !error_contest with
+    | None -> ""
+    | Some (c, b, tail) -> Account.contest_navigation b (active tail) c in
+  View.send status markup (html "Error" (nav ^ "<p>" ^ View.escape message ^ "</p>"))
 
 let contest id =
   let root = path (data ()) "contests" in
@@ -367,6 +381,7 @@ let route () =
       let user, request, body = Peer.incoming () in
       Account.remote := Some user;
       Peer.request := (if env "REQUEST_METHOD" = "POST" then Some request else None);
+      error_contest := Some (c, !prefix, tail);
       (match env "REQUEST_METHOD", tail with
        | "GET", _ -> get c tail
        | "POST", [ "submit" ] -> post ~fields:(Bj.Form.parse (env "CONTENT_TYPE") body) c
@@ -376,6 +391,7 @@ let route () =
       prefix := "/contests/" ^ id;
       let tail = if tail = [ "" ] then [] else tail in
       let c = contest id in
+      error_contest := Some (c, !prefix, tail);
       (match env "REQUEST_METHOD", tail with
        | "GET", _ -> get c tail
        | "POST", [ "submit" ] -> post c
