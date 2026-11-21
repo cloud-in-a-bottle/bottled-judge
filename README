@@ -23,7 +23,7 @@ instance needs its own JUDGE_DOMAIN setting; this one defaults to
 judge.1.bottle.cloud. Only test installations may use
 JUDGE_ALLOW_HTTP_PEERS=1 to connect over HTTP.
 
-The judge runs on Debian 13 with Python 3.13.5, OCaml 5.3,
+The judge runs on Debian 13 with OCaml 5.3 and Python 3 for contestant submissions,
 GCC/g++ 14.2 (C23/C++23) and Rust 1.85 (edition 2024).
 Only image packages are available. Dependencies cannot be downloaded.
 

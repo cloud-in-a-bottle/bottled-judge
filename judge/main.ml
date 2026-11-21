@@ -257,17 +257,22 @@ let private_dir () =
 
 let oracle_output h =
   let contest = Bj.Contest.load (path (path (data ()) "contests") h.Bj.Hack.contest) in
-  let oracle = path (path contest.dir h.problem) "oracle.py" in
+  let oracle = path (path contest.dir h.problem) "oracle.ml" in
   let private_files = private_dir () in
   let input = path private_files "input" in
   let expected = path private_files "expected" in
   write input h.input;
   let scratch = prepare_sandbox () in
-  let script = path scratch "oracle.py" in
+  let script = path scratch "oracle.ml" in
   write script (Bj.File.read oracle);
   Unix.chown script uid uid;
   let limits = { cpu = 5000; wall = 6000; mem = 512; nproc = 8; fsize = 1048576 } in
-  let killed, status, _, _ = sandbox limits input expected "/dev/null" scratch [| "python3"; "oracle.py" |] in
+  let compiled, compiled_status, _, _ = sandbox
+    { cpu = 30000; wall = 30000; mem = 2048; nproc = 64; fsize = 2 * cap }
+    "/dev/null" "/dev/null" "/dev/null" scratch
+    [| "ocamlopt"; "-o"; "oracle"; "oracle.ml" |] in
+  if compiled || compiled_status <> WEXITED 0 then Error Bj.Hack.Error else
+  let killed, status, _, _ = sandbox limits input expected "/dev/null" scratch [| "./oracle" |] in
   if killed then Error Bj.Hack.Error else match status with
   | Unix.WEXITED 2 -> Error Bj.Hack.Invalid
   | Unix.WEXITED 0 when regular expected -> Ok (Bj.File.read expected)
@@ -401,10 +406,7 @@ let prepare () =
   let keys = path (data ()) "keys" in
   ensure keys 0o700;
   access keys 1000 1000 0o700;
-  let pid = Unix.create_process "python3" [| "python3"; "/src/web/peer.py"; "init" |]
-    Unix.stdin Unix.stdout Unix.stderr in
-  let _, status = Unix.waitpid [] pid in
-  if status <> Unix.WEXITED 0 then failwith "Instance key initialization failed";
+  Bj.Crypto.key_init keys;
   access (path keys "private") 1000 1000 0o600;
   let old = path (data ()) "peers" in
   if Sys.file_exists old && Sys.is_directory old then begin

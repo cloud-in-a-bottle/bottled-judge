@@ -30,23 +30,22 @@ let random n =
   View.hex s
 
 let hash mode input =
-  let in_read, in_write = Unix.pipe () in
-  let out_read, out_write = Unix.pipe () in
-  Unix.set_close_on_exec in_write;
-  Unix.set_close_on_exec out_read;
-  let pid = Unix.create_process "python3" [| "python3"; "/src/web/password.py"; mode |]
-    in_read out_write Unix.stderr in
-  Unix.close in_read;
-  Unix.close out_write;
-  let oc = Unix.out_channel_of_descr in_write in
-  output_string oc input;
-  close_out oc;
-  let ic = Unix.in_channel_of_descr out_read in
-  let answer = try input_line ic with End_of_file -> "" in
-  close_in ic;
-  let _, status = Unix.waitpid [] pid in
-  if status <> Unix.WEXITED 0 then failwith "Password hashing failed";
-  answer
+  match mode with
+  | "hash" ->
+      let salt = Bj.Crypto.random 16 in
+      "scrypt$" ^ Bj.Crypto.hex salt ^ "$" ^ Bj.Crypto.hex (Bj.Crypto.scrypt input salt)
+  | "verify" ->
+      (try match String.index_opt input '\n' with
+      | Some i ->
+          let stored = String.sub input 0 i in
+          let password = String.sub input (i + 1) (String.length input - i - 1) in
+          (match String.split_on_char '$' stored with
+          | [ "scrypt"; salt; digest ] when String.length salt = 32 && String.length digest = 64 ->
+              if Bj.Crypto.equal (Bj.Crypto.scrypt password (Bj.Crypto.unhex salt))
+                   (Bj.Crypto.unhex digest) then "yes" else "no"
+          | _ -> "no")
+      | _ -> "no" with Invalid_argument _ -> "no")
+  | _ -> invalid_arg "Invalid hashing mode"
 
 let account_file username = path (accounts ()) username
 

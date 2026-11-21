@@ -1,3 +1,5 @@
 (library
  (name bj)
- (libraries unix))
+ (libraries unix)
+ (foreign_stubs (language c) (names crypto_stubs))
+ (c_library_flags -lcrypto))

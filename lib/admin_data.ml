@@ -46,10 +46,10 @@ let validate data id =
     if not (directory folder && regular (path folder "problem.txt") &&
       regular (path folder "statement.html")) then failwith "Invalid problem files";
     let files = Array.to_list (Sys.readdir folder) in
-    let oracle = path folder "oracle.py" in
+    let oracle = path folder "oracle.ml" in
     if not (Sys.file_exists oracle && regular oracle && (Unix.stat oracle).st_size <= 65536) then
       failwith "Each problem needs an oracle for scheduled hacking";
-    let expected = [ "oracle.py"; "problem.txt"; "statement.html"; "tests" ] in
+    let expected = [ "oracle.ml"; "problem.txt"; "statement.html"; "tests" ] in
     if List.sort compare files <> expected then
       failwith "Unexpected problem files";
     ignore (Test_set.numbers (path folder "tests"))) c.problems;

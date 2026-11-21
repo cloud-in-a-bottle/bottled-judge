@@ -99,7 +99,7 @@ let problem_form action title time memory statement oracle button =
   "<p><label>Time limit (ms) <input name=\"time\" type=\"number\" min=\"100\" max=\"10000\" required value=\"" ^ escape time ^ "\"></label></p>" ^
   "<p><label>Memory limit (MB) <input name=\"memory\" type=\"number\" min=\"32\" max=\"1024\" required value=\"" ^ escape memory ^ "\"></label></p>" ^
   "<p><label>Statement (HTML)<br><textarea name=\"statement\" rows=\"16\" cols=\"80\">" ^ escape statement ^ "</textarea></label></p>" ^
-  "<p><label>Oracle (Python 3; read proposed input, exit 2 if invalid, otherwise print the exact answer)<br>" ^
+  "<p><label>Oracle (OCaml; read proposed input, exit 2 if invalid, otherwise print the exact answer)<br>" ^
   "<textarea name=\"oracle\" rows=\"14\" cols=\"80\">" ^ escape oracle ^ "</textarea></label></p>" ^
   "<button>" ^ escape button ^ "</button></form>"
 
@@ -119,7 +119,7 @@ let save_problem dir title time memory statement oracle =
   Bj.Kv.write (path dir "problem.txt")
     [ "title", title; "time", string_of_int time; "memory", string_of_int memory ] "";
   Bj.Admin_data.write (path dir "statement.html") statement 0o644;
-  let file = path dir "oracle.py" in
+  let file = path dir "oracle.ml" in
   if oracle <> "" then Bj.Admin_data.write file oracle 0o644
   else if Sys.file_exists file then Unix.unlink file
 
@@ -223,7 +223,7 @@ let draft_problem id name =
   let folder = load_problem dir name in
   let h, _ = Bj.Kv.read (path folder "problem.txt") in
   let statement = Bj.File.read (path folder "statement.html") in
-  let oracle = path folder "oracle.py" in
+  let oracle = path folder "oracle.ml" in
   let oracle = if Sys.file_exists oracle then Bj.File.read oracle else "" in
   let base = manage_path id ^ "/p/" ^ name in
   let tests = path folder "tests" in

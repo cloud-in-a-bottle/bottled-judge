@@ -37,35 +37,107 @@ let read_body () =
   if n < 0 || n > 131072 then invalid_arg "Request too large";
   try really_input_string stdin n with End_of_file -> invalid_arg "Truncated request"
 
-let run mode body values direct =
-  let input, output = Unix.pipe () in
-  Unix.set_close_on_exec output;
-  let result, sink = if direct then Unix.stdout, None else
-    let r, w = Unix.pipe () in
-    Unix.set_close_on_exec r;
-    w, Some r in
-  let extra = Array.of_list (List.map (fun (k, v) -> k ^ "=" ^ v) values) in
-  let pid = Unix.create_process_env "python3" [| "python3"; "/src/web/peer.py"; mode |]
-    (Array.append (Unix.environment ()) extra) input result Unix.stderr in
-  Unix.close input;
-  (match sink with Some _ -> Unix.close result | None -> ());
-  let oc = Unix.out_channel_of_descr output in
-  output_string oc body;
-  close_out oc;
-  let response = match sink with
-    | None -> ""
-    | Some fd ->
-        let ic = Unix.in_channel_of_descr fd in
-        let value = try input_line ic with End_of_file -> "" in
-        close_in ic;
-        value in
-  let _, status = Unix.waitpid [] pid in
-  response, status
+let key_file () = path (keys ()) "private"
+
+let private_key () =
+  let key = Bj.File.read (key_file ()) in
+  if String.length key <> 32 then failwith "Invalid instance key";
+  key
+
+let valid_hex n text =
+  String.length text = n && String.for_all (function '0'..'9' | 'a'..'f' -> true | _ -> false) text
+
+let header value = not (String.contains value '\r' || String.contains value '\n')
+
+let fetch peer method_ endpoint body headers =
+  if not (name_ok peer) then invalid_arg "Invalid instance domain";
+  let c = Curl.init () in
+  Fun.protect ~finally:(fun () -> Curl.cleanup c) (fun () ->
+    let http = env "JUDGE_ALLOW_HTTP_PEERS" = "1" in
+    Curl.set_url c ((if http then "http://" else "https://") ^ peer ^
+      (if http then ":8080" else "") ^ endpoint);
+    Curl.set_connecttimeout c 5;
+    Curl.set_timeout c 15;
+    Curl.set_proxy c "";
+    Curl.set_sslverifypeer c true;
+    Curl.set_sslverifyhost c Curl.SSLVERIFYHOST_HOSTNAME;
+    Curl.set_followlocation c false;
+    Curl.set_httpheader c headers;
+    if method_ = "POST" then (Curl.set_post c true; Curl.set_postfields c body;
+      Curl.set_postfieldsize c (String.length body));
+    let content = Buffer.create 4096 in
+    let too_large = ref false in
+    let response_headers = ref [] in
+    Curl.set_writefunction c (fun chunk ->
+      if Buffer.length content + String.length chunk > 4194304 then (too_large := true; 0)
+      else (Buffer.add_string content chunk; String.length chunk));
+    Curl.set_headerfunction c (fun line ->
+      (if String.starts_with ~prefix:"HTTP/" line then response_headers := [] else
+        match String.index_opt line ':' with
+        | None -> ()
+        | Some i ->
+            let name = String.lowercase_ascii (String.sub line 0 i) in
+            if List.mem name [ "content-type"; "location"; "refresh" ] then begin
+              let value = String.trim (String.sub line (i+1) (String.length line-i-1)) in
+              let name = match name with "content-type" -> "Content-Type"
+                | "location" -> "Location" | _ -> "Refresh" in
+              if header value then response_headers := (name, value) :: !response_headers
+            end);
+      String.length line);
+    (try Curl.perform c with ex -> if !too_large then failwith "Response too large" else raise ex);
+    Curl.get_responsecode c, List.rev !response_headers, Buffer.contents content)
+
+let message method_ endpoint author csrf timestamp request content_type body =
+  String.concat "\n" [ method_; endpoint; author; csrf; timestamp; request; content_type;
+    Bj.Crypto.hex (Bj.Crypto.sha256 body) ]
+
+let public_of peer =
+  let code, _, body = fetch peer "GET" "/api/federation/v1/key" "" [] in
+  if code <> 200 || String.length body <> 65 || body.[64] <> '\n' then
+    invalid_arg "Invalid peer key response";
+  let hex = String.sub body 0 64 in
+  if not (valid_hex 64 hex) then invalid_arg "Invalid peer key";
+  Bj.Crypto.unhex hex
+
+let verify body =
+  let name = env "HTTP_X_JUDGE_PEER" and author = env "HTTP_X_JUDGE_AUTHOR" in
+  let csrf = env "HTTP_X_JUDGE_CSRF" and timestamp = env "HTTP_X_JUDGE_TIME" in
+  let request = env "HTTP_X_JUDGE_REQUEST" and signature = env "HTTP_X_JUDGE_SIGNATURE" in
+  let method_ = env "REQUEST_METHOD" in
+  let endpoint = List.hd (String.split_on_char '?' (env "REQUEST_URI")) in
+  let time = try int_of_string timestamp with _ -> invalid_arg "Invalid timestamp" in
+  if env "QUERY_STRING" <> "" || String.length body > 131072 ||
+     abs (int_of_float (Unix.time ()) - time) > 300 ||
+     not (valid_hex 128 signature && name_ok name) ||
+     (author <> "" && (match String.split_on_char '@' author with
+       | [ username; domain ] -> domain <> name || String.length username < 3 ||
+           String.length username > 24 || not (String.for_all (function
+             'a'..'z' | '0'..'9' | '_' | '-' -> true | _ -> false) username)
+       | _ -> true)) ||
+     (author = "" && csrf <> "") ||
+     (author <> "" && not (valid_hex 32 csrf)) ||
+     (method_ = "POST" && not (Bj.Sub.id_ok request)) ||
+     (method_ = "GET" && request <> "") ||
+     (method_ <> "GET" && method_ <> "POST") then invalid_arg "Invalid request";
+  let signed = message method_ endpoint author csrf timestamp request (env "CONTENT_TYPE") body in
+  if not (Bj.Crypto.verify (public_of name) signed (Bj.Crypto.unhex signature)) then
+    invalid_arg "Invalid federation signature"
+
+let send peer method_ endpoint body author csrf request content_type =
+  let timestamp = string_of_int (int_of_float (Unix.time ())) in
+  let signed = message method_ endpoint author csrf timestamp request
+    (if method_ = "POST" then content_type else "") body in
+  let signature = Bj.Crypto.hex (Bj.Crypto.sign (private_key ()) signed) in
+  let headers = [ "X-Judge-Peer: " ^ Account.domain ();
+    "X-Judge-Author: " ^ author; "X-Judge-Csrf: " ^ csrf;
+    "X-Judge-Time: " ^ timestamp; "X-Judge-Request: " ^ request;
+    "X-Judge-Signature: " ^ signature ] @
+    (if method_ = "POST" then [ "Content-Type: " ^ content_type ] else []) in
+  fetch peer method_ endpoint body headers
 
 let public_key () =
-  let answer, status = run "public" "" [] false in
-  if status <> Unix.WEXITED 0 || String.length answer <> 64 then failwith "Instance key unavailable";
-  View.send "200 OK" "text/plain; charset=utf-8" (answer ^ "\n")
+  View.send "200 OK" "text/plain; charset=utf-8"
+    (Bj.Crypto.hex (Bj.Crypto.public_key (private_key ())) ^ "\n")
 
 let handle_join () =
   let page body = View.send "200 OK" "text/html; charset=utf-8"
@@ -86,11 +158,11 @@ let handle_join () =
         if Bj.Contest.find (path (data ()) "contests") id = None then invalid_arg "Contest not found";
         "/contests/" ^ id
       end else begin
-        let values = [ "FED_PEER", name; "FED_METHOD", "GET";
-          "FED_PATH", "/api/federation/v1/contests/" ^ id; "FED_AUTHOR", user.author;
-          "FED_CSRF", user.csrf; "FED_REQUEST", ""; "FED_CONTENT_TYPE", "" ] in
-        let response, status = run "check" "" values false in
-        if status <> Unix.WEXITED 0 || response <> "ok" then invalid_arg "Contest link unavailable";
+        let available = try
+          let code, _, _ = send name "GET" ("/api/federation/v1/contests/" ^ id)
+            "" user.author user.csrf "" "" in
+          code = 200 with _ -> false in
+        if not available then invalid_arg "Contest link unavailable";
         Account.add_join user name id;
         "/contests/" ^ name ^ "/" ^ id
       end in
@@ -101,8 +173,7 @@ let handle_join () =
 
 let incoming () =
   let body = if env "REQUEST_METHOD" = "POST" then read_body () else "" in
-  let response, status = run "verify" body [] false in
-  if response <> "ok" || status <> Unix.WEXITED 0 then invalid_arg "Invalid federation signature";
+  verify body;
   let author = env "HTTP_X_JUDGE_AUTHOR" in
   let csrf = env "HTTP_X_JUDGE_CSRF" in
   let account = if author = "" then None else Some { Account.username = ""; author; csrf; admin = false } in
@@ -124,9 +195,16 @@ let forward peer id tail =
   end else "", "" in
   let endpoint = "/api/federation/v1/contests/" ^ id ^
     (if tail = [] then "" else "/" ^ String.concat "/" tail) in
-  let values = [ "FED_PEER", peer; "FED_METHOD", method_;
-    "FED_PATH", endpoint; "FED_AUTHOR", (match account with Some user -> user.author | None -> "");
-    "FED_CSRF", (match account with Some user -> user.csrf | None -> "");
-    "FED_REQUEST", request; "FED_CONTENT_TYPE", env "CONTENT_TYPE" ] in
-  let _, status = run "send" body values true in
-  if status <> Unix.WEXITED 0 then prerr_endline "Federation request failed"
+  let author, csrf = match account with
+    | Some user -> user.author, user.csrf | None -> "", "" in
+  try
+    let status, headers, content = send peer method_ endpoint body author csrf request (env "CONTENT_TYPE") in
+    let reason = match status with
+      | 200 -> "OK" | 303 -> "See Other" | 400 -> "Bad Request" | 401 -> "Unauthorized"
+      | 403 -> "Forbidden" | 404 -> "Not Found" | 409 -> "Conflict" | 500 -> "Internal Server Error"
+      | _ -> "Response" in
+    let kind = match List.assoc_opt "Content-Type" headers with
+      | Some kind -> kind | None -> "text/plain; charset=utf-8" in
+    let headers = List.filter (fun (name, _) -> name <> "Content-Type") headers in
+    View.send ~headers (string_of_int status ^ " " ^ reason) kind content
+  with _ -> View.send "502 Bad Gateway" "text/plain; charset=utf-8" "Contest host unavailable"
