@@ -34,7 +34,9 @@ let contest id =
   let root = path (data ()) "contests" in
   match Bj.Contest.find root id with
   | None -> fail "404 Not Found" "Not found"
-  | Some c -> c
+  | Some c ->
+      Bj.Schedule.advance (data ()) c.dir (int_of_float (Unix.time ()));
+      Bj.Contest.load c.dir
 
 let problem c name =
   match List.find_opt (fun p -> p.Bj.Contest.name = name) c.Bj.Contest.problems with
@@ -181,7 +183,8 @@ let post_hack ?fields (c : Bj.Contest.t) =
       if h.author <> user.author || h.contest <> Filename.basename c.dir ||
          h.target <> target || h.input <> input then fail "409 Conflict" "Request ID already used"
     end else begin
-      if (Bj.Contest.load c.dir).phase <> Bj.Contest.Hacking then fail "403 Forbidden" "Hacks are not open";
+      if not (Bj.Schedule.can_hack (Bj.Contest.load c.dir) (int_of_float (Unix.time ()))) then
+        fail "403 Forbidden" "Hacks are not open";
       let target_file = path (path (data ()) "done") target in
       let s = try Bj.Sub.read target_file with _ -> fail "404 Not Found" "Target not found" in
       if s.contest <> Filename.basename c.dir || s.practice || s.author = user.author ||
@@ -223,7 +226,9 @@ let post ?fields (c : Bj.Contest.t) =
          old.lang <> s.lang || old.source <> s.source then
         fail "409 Conflict" "Request ID already used"
     end else begin
-      if (Bj.Contest.load c.dir).phase <> (if practice then Bj.Contest.Finished else Bj.Contest.Running) then
+      let current = Bj.Contest.load c.dir in
+      if not (if practice then current.phase = Bj.Contest.Finished else
+        Bj.Schedule.can_submit current (int_of_float (Unix.time ()))) then
         fail "403 Forbidden" "Contest is not accepting submissions";
       Bj.Sub.write pending s
     end));
@@ -244,16 +249,17 @@ let get c tail =
           | Bj.Contest.Hacking -> "<p>Hacks are open.</p>"
           | Bj.Contest.Finished -> "<p>Contest is finished.</p>"
           | Bj.Contest.Ready -> "") in
-      View.send "200 OK" markup (html c.title (navigation "Problems" c ^ body))
+      View.send "200 OK" markup (html c.title (navigation "Problems" c ^ Account.schedule_info c ^ body))
   | [ "problems"; name ] when c.phase <> Bj.Contest.Ready ->
       let p = problem c (segment name) in
       let statement = Bj.File.read (path (path c.dir p.name) "statement.html") in
       View.send "200 OK" markup (html p.title (navigation "Problems" c ^ statement ^
         (if c.phase = Bj.Contest.Running || c.phase = Bj.Contest.Finished then submit_form c p.name else "")))
   | [ "submit" ] ->
-      if c.phase <> Bj.Contest.Running && c.phase <> Bj.Contest.Finished then
+      if not (Bj.Schedule.can_submit c (int_of_float (Unix.time ())) || c.phase = Bj.Contest.Finished) then
         fail "403 Forbidden" "Contest is not accepting submissions";
-      View.send "200 OK" markup (html "Submit" (navigation "Submit" c ^ submit_form c ""))
+      View.send "200 OK" markup (html "Submit" (navigation "Submit" c ^
+        (if c.phase = Bj.Contest.Running then Account.schedule_info c else "") ^ submit_form c ""))
   | [ "submissions"; id ] ->
       let s, verdict, ce = submission c id in
       let reveal = c.phase <> Bj.Contest.Running && c.phase <> Bj.Contest.Ready &&
@@ -270,8 +276,8 @@ let get c tail =
         | _ -> None) (official c) in
       View.send "200 OK" markup (html "Solutions" (navigation "Solutions" c ^ "<ul>" ^ String.concat "" rows ^ "</ul>"))
   | [ "hack" ] ->
-      if c.phase <> Bj.Contest.Hacking then fail "403 Forbidden" "Hacks are not open";
-      View.send "200 OK" markup (html "Propose a hack" (navigation "Hack" c ^ hack_form c))
+      if not (Bj.Schedule.can_hack c (int_of_float (Unix.time ()))) then fail "403 Forbidden" "Hacks are not open";
+      View.send "200 OK" markup (html "Propose a hack" (navigation "Hack" c ^ Account.schedule_info c ^ hack_form c))
   | [ "hacks" ] when c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished ->
       let rows = List.map (fun (h : Bj.Hack.t) ->
         let status = match hack_result h with None -> "pending" | Some r -> Bj.Hack.string_of_outcome r in
@@ -336,7 +342,8 @@ let home () =
     List.sort (fun a b -> compare (int_of_string b) (int_of_string a)) |>
     List.filter_map (fun id ->
       try let c = Bj.Contest.load (path dir id) in
-        Some ("<li>" ^ View.link (link_to id) c.title ^ " (" ^ label ^ ")</li>")
+        Some ("<li>" ^ View.link (link_to id) c.title ^ " (" ^ label ^ ")" ^
+          Account.schedule_label c ^ "</li>")
       with _ -> None) in
   let local = entries (path (data ()) "contests") "local" (fun id -> "/contests/" ^ id) in
   let remote = match user with

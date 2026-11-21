@@ -32,7 +32,8 @@ let field header =
               Some (slice a 6 (String.length a - 1)) else None) attrs with
           | [ name ] when List.mem name [ "username"; "password"; "next"; "csrf"; "request"; "url";
             "problem"; "lang"; "source"; "file"; "title"; "time"; "memory";
-            "statement"; "archive"; "oracle"; "target"; "input" ] -> name
+            "statement"; "archive"; "oracle"; "target"; "input";
+            "starts"; "submissions"; "intermission"; "hacks" ] -> name
           | _ -> bad ())
       | _ -> bad ())
   | _ -> bad ()

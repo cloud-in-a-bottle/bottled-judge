@@ -33,6 +33,9 @@ let validate data id =
   title (Kv.get header "title");
   let c = Contest.load dir in
   if c.phase <> Contest.Ready then failwith "Draft must be ready";
+  (match c.schedule with
+  | Some schedule when schedule.starts > int_of_float (Unix.time ()) -> ()
+  | _ -> failwith "Set a future UTC start before publishing");
   if c.problems = [] then failwith "Add a problem first";
   if Sys.file_exists (published data id) then failwith "Contest already exists";
   List.iter (fun p ->
@@ -44,10 +47,9 @@ let validate data id =
       regular (path folder "statement.html")) then failwith "Invalid problem files";
     let files = Array.to_list (Sys.readdir folder) in
     let oracle = path folder "oracle.py" in
-    let expected = if Sys.file_exists oracle then
-      (if not (regular oracle) || (Unix.stat oracle).st_size > 65536 then failwith "Invalid oracle";
-       [ "oracle.py"; "problem.txt"; "statement.html"; "tests" ])
-      else [ "problem.txt"; "statement.html"; "tests" ] in
+    if not (Sys.file_exists oracle && regular oracle && (Unix.stat oracle).st_size <= 65536) then
+      failwith "Each problem needs an oracle for scheduled hacking";
+    let expected = [ "oracle.py"; "problem.txt"; "statement.html"; "tests" ] in
     if List.sort compare files <> expected then
       failwith "Unexpected problem files";
     ignore (Test_set.numbers (path folder "tests"))) c.problems;

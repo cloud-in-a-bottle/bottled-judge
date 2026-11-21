@@ -194,11 +194,13 @@ let access p uid gid mode =
 
 let secure_contests () =
   let root = path (data ()) "contests" in
-  access root 0 1000 0o770;
+  access root 0 1000 0o2770;
   Array.iter (fun name ->
     let dir = path root name in
     if Sys.is_directory dir then begin
-      access dir 0 1000 0o770;
+      access dir 0 1000 0o2770;
+      let lock = path dir ".phase.lock" in
+      if regular lock then access lock 0 1000 0o660;
       Array.iter (fun name ->
         let p = path dir name in
         if Sys.is_directory p then begin
@@ -378,6 +380,16 @@ let worker () =
   in
   loop ()
 
+let scheduler () =
+  let folder = path (data ()) "contests" in
+  while true do
+    let now = int_of_float (Unix.gettimeofday ()) in
+    Array.iter (fun id ->
+      if Bj.Contest.id_ok id then Bj.Schedule.advance (data ()) (path folder id) now)
+      (Sys.readdir folder);
+    Unix.sleepf 0.2
+  done
+
 let prepare () =
   ensure (path (data ()) "contests") 0o755;
   ensure (Bj.Admin_data.drafts (data ())) 0o700;
@@ -414,6 +426,7 @@ let prepare () =
   access (done_dir ()) 0 1000 0o750;
   let hacks = path (data ()) "hacks" in
   ensure hacks 0o755;
+  access hacks 0 1000 0o750;
   ensure (hack_pending ()) 0o700;
   access (hack_pending ()) 1000 1000 0o700;
   ensure (hack_done ()) 0o750;
@@ -437,13 +450,19 @@ let serve () =
     Sys.set_signal Sys.sigterm Sys.Signal_default;
     try worker () with ex -> prerr_endline (Printexc.to_string ex); exit 1
   end;
+  let s = Unix.fork () in
+  if s = 0 then begin
+    Sys.set_signal Sys.sigterm Sys.Signal_default;
+    try scheduler () with ex -> prerr_endline (Printexc.to_string ex); exit 1
+  end;
   let rec loop () =
     let p, _ = Unix.wait () in
-    if p <> l && p <> j then loop ()
+    if p <> l && p <> j && p <> s then loop ()
   in
   loop ();
   (try Unix.kill l Sys.sigterm with _ -> ());
   (try Unix.kill j Sys.sigterm with _ -> ());
+  (try Unix.kill s Sys.sigterm with _ -> ());
   (try reap 50 with _ -> ());
   exit 1
 

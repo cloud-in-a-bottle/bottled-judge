@@ -3,6 +3,10 @@ bottled-judge
 
 Admin-created contests have problems, hidden tests, limits and hacking
 phases. Successful hacks test every accepted solution to that problem.
+Before publishing, the admin sets a UTC start and durations for submissions,
+judging intermission and hacks. The host moves phases automatically. Hacks
+open only after the intermission and official judging finish; hack submissions
+close at the deadline, and the contest finishes after queued hacks are applied.
 After a contest finishes, submissions become practice: they run the hidden
 tests and applied successful hacks without changing contest standings.
 The first local signup becomes admin. Everyone uses the same sign-in and

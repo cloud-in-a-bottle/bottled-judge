@@ -173,12 +173,36 @@ let contest_navigation base active (c : Bj.Contest.t) =
   let links = [ "Problems", base; "Submit", base ^ "/submit";
     "My submissions", base ^ "/submissions"; "Standings", base ^ "/standings" ] @
     (if past then [ "Solutions", base ^ "/solutions" ] else []) @
-    (if c.phase = Bj.Contest.Hacking then [ "Hack", base ^ "/hack" ] else []) @
+    (if Bj.Schedule.can_hack c (int_of_float (Unix.time ())) then [ "Hack", base ^ "/hack" ] else []) @
     (if c.phase = Bj.Contest.Hacking || c.phase = Bj.Contest.Finished
       then [ "Hacks", base ^ "/hacks" ] else []) @ manage in
   "<div class=\"contest-navigation\">" ^ navigation (current ()) ^
   "<nav class=\"contest-nav\">" ^ String.concat "" (List.map (fun (name, target) -> link name target) links) ^
   "</nav></div>"
+
+let schedule_info (c : Bj.Contest.t) = match c.schedule with
+  | None -> if c.phase = Bj.Contest.Ready then "<p>Schedule not set.</p>" else ""
+  | Some s ->
+      let close = s.starts + s.submissions in
+      let hacking = close + s.intermission in
+      let actual = match c.hacking_started with
+        | None -> "Hacking opens at or after " ^ Bj.Contest.utc hacking ^ " once judging finishes."
+        | Some start -> "Hacking opened " ^ Bj.Contest.utc start ^ "; hacks close " ^
+            Bj.Contest.utc (start + s.hacks) ^ "." in
+      "<p>Start " ^ Bj.Contest.utc s.starts ^ "; submissions close " ^ Bj.Contest.utc close ^
+      "; judging interval " ^ string_of_int s.intermission ^ " seconds. " ^ actual ^ "</p>" ^
+      (match c.finished with None -> "" | Some at -> "<p>Finished " ^ Bj.Contest.utc at ^ ".</p>")
+
+let schedule_label (c : Bj.Contest.t) = match c.phase, c.schedule with
+  | Bj.Contest.Ready, None -> " · schedule pending"
+  | Bj.Contest.Ready, Some s -> " · starts " ^ Bj.Contest.utc s.starts
+  | Bj.Contest.Running, Some s -> " · submissions close " ^ Bj.Contest.utc (s.starts + s.submissions)
+  | Bj.Contest.Stopped, Some s -> " · hacking no earlier than " ^
+      Bj.Contest.utc (s.starts + s.submissions + s.intermission)
+  | Bj.Contest.Hacking, Some s -> (match c.hacking_started with
+      | Some at -> " · hacks close " ^ Bj.Contest.utc (at + s.hacks) | None -> "")
+  | Bj.Contest.Finished, _ -> (match c.finished with Some at -> " · finished " ^ Bj.Contest.utc at | None -> "")
+  | _ -> ""
 
 let joins username =
   let file = path (joined ()) username in

@@ -63,14 +63,34 @@ let next_id () =
     string_of_int id)
 
 let contest_file dir title =
-  Bj.Kv.write (path dir "contest.txt")
-    [ "title", title; "phase", "ready" ] ""
+  let file = path dir "contest.txt" in
+  if Sys.file_exists file then Bj.Contest.update dir [ "title", title ]
+  else Bj.Kv.write file [ "title", title; "phase", "ready" ] ""
 
 let contest_form action title button =
   "<form method=\"post\" enctype=\"multipart/form-data\" action=\"" ^ escape action ^ "\">" ^
   csrf () ^
   "<p><label>Title <input name=\"title\" required maxlength=\"100\" value=\"" ^ escape title ^ "\"></label></p>" ^
   "<button>" ^ escape button ^ "</button></form>"
+
+let schedule_fields fields =
+  let starts = try Bj.Contest.timestamp (get fields "starts") with _ -> bad "Invalid UTC start" in
+  let seconds name =
+    let n = try int_of_string (get fields name) with _ -> bad ("Invalid " ^ name) in
+    if n < 1 || n > 30 * 24 * 60 * 60 then bad ("Invalid " ^ name);
+    n in
+  { Bj.Contest.starts; submissions = seconds "submissions";
+    intermission = seconds "intermission"; hacks = seconds "hacks" }
+
+let schedule_form action (c : Bj.Contest.t) =
+  let value f fallback = match c.schedule with Some s -> string_of_int (f s) | None -> fallback in
+  let starts = match c.schedule with Some s -> Bj.Contest.utc s.starts | None -> "" in
+  "<form method=\"post\" enctype=\"multipart/form-data\" action=\"" ^ escape action ^ "\">" ^ csrf () ^
+  "<p><label>Starts (UTC, YYYY-MM-DDTHH:MM:SSZ) <input name=\"starts\" required maxlength=\"20\" value=\"" ^ starts ^ "\"></label></p>" ^
+  "<p><label>Submission duration (seconds) <input name=\"submissions\" type=\"number\" min=\"1\" required value=\"" ^ value (fun s -> s.submissions) "3600" ^ "\"></label></p>" ^
+  "<p><label>Judging interval (seconds) <input name=\"intermission\" type=\"number\" min=\"1\" required value=\"" ^ value (fun s -> s.intermission) "600" ^ "\"></label></p>" ^
+  "<p><label>Hack duration (seconds) <input name=\"hacks\" type=\"number\" min=\"1\" required value=\"" ^ value (fun s -> s.hacks) "1800" ^ "\"></label></p>" ^
+  "<button>Save schedule</button></form>"
 
 let problem_form action title time memory statement oracle button =
   "<form method=\"post\" enctype=\"multipart/form-data\" action=\"" ^ escape action ^ "\">" ^
@@ -167,6 +187,24 @@ let update_contest id =
   contest_file dir title;
   redirect (manage_path id)
 
+let update_schedule id =
+  let schedule = schedule_fields (form ()) in
+  let draft_dir = Bj.Admin_data.draft (data ()) (valid_id id) in
+  let dir = if Sys.file_exists draft_dir then draft_dir else Bj.Admin_data.published (data ()) id in
+  if not (Sys.file_exists dir) then fail "404 Not Found" "Unknown contest";
+  Bj.Contest.with_lock dir (fun () ->
+    if not (Sys.file_exists (path dir "contest.txt")) then fail "409 Conflict" "Contest moved";
+    let c = Bj.Contest.load dir in
+    let now = int_of_float (Unix.time ()) in
+    if c.phase <> Bj.Contest.Ready then fail "409 Conflict" "Contest has started";
+    if dir <> draft_dir then begin
+      if (match c.schedule with Some old -> old.starts <= now | None -> false) then
+        fail "409 Conflict" "Contest start is due";
+      if schedule.starts <= now then bad "Start must be in the future"
+    end;
+    Bj.Contest.set_schedule dir schedule);
+  redirect (manage_path id)
+
 let draft_page id dir =
   let c = Bj.Contest.load dir in
   let base = manage_path id in
@@ -175,6 +213,7 @@ let draft_page id dir =
   page c.title
     ("<p>Draft. Only you can see it.</p>" ^
     contest_form base c.title "Save" ^
+    schedule_form (base ^ "/schedule") c ^
     "<h2>Problems</h2><ol>" ^ String.concat "" problems ^ "</ol>" ^
     problem_form (base ^ "/p") "" "2000" "256" "" "" "Add problem" ^
     post_button (base ^ "/publish") "Publish" ^ post_button (base ^ "/delete") "Delete draft")
@@ -238,55 +277,21 @@ let delete_problem id name =
 
 let publish id =
   let dir = draft id in
-  (try ignore (Bj.Admin_data.validate (data ()) id) with
-  | Failure message -> bad message
-  | ex -> bad (Printexc.to_string ex));
-  Array.iter (fun name -> if name.[0] = '.' then Bj.Admin_data.remove (path dir name)) (Sys.readdir dir);
-  Sys.rename dir (Bj.Admin_data.published (data ()) id);
+  Bj.Contest.with_lock dir (fun () ->
+    (try ignore (Bj.Admin_data.validate (data ()) id) with
+    | Failure message -> bad message
+    | ex -> bad (Printexc.to_string ex));
+    Array.iter (fun name -> if name.[0] = '.' && name <> ".phase.lock" then Bj.Admin_data.remove (path dir name)) (Sys.readdir dir);
+    Unix.chmod dir 0o2770;
+    Sys.rename dir (Bj.Admin_data.published (data ()) id));
   redirect (contest_path id)
 
 let delete_draft id =
   Bj.Admin_data.remove (draft id);
   redirect "/"
 
-let hack_readiness id c =
-  if c.Bj.Contest.problems = [] then Some "No problems to hack" else
-  let missing = List.find_opt (fun p ->
-    let oracle = path (path c.Bj.Contest.dir p.Bj.Contest.name) "oracle.py" in
-    not (Sys.file_exists oracle && Bj.Admin_data.regular oracle)) c.problems in
-  match missing with
-  | Some p -> Some ("Problem " ^ p.name ^ " needs an oracle before hacks can start")
-  | None ->
-      let pending = path (data ()) "pending" in
-      let waiting = Array.exists (fun name ->
-        Bj.Sub.id_ok name && (Bj.Sub.read (path pending name)).contest = id) (Sys.readdir pending) in
-      if waiting then Some "Wait for all accepted submissions to be judged" else None
-
-let finish_readiness id =
-  let hacks = path (data ()) "hacks" in
-  let pending = path hacks "pending" and done_dir = path hacks "done" in
-  let waiting = Array.exists (fun name ->
-    Bj.Sub.id_ok name && (Bj.Hack.read (path pending name)).contest = id) (Sys.readdir pending) in
-  let applying = Array.exists (fun name ->
-    if not (Bj.Sub.id_ok name) then false else
-    let h = Bj.Hack.read (path done_dir name) in
-    h.contest = id && h.result = Some Bj.Hack.Success &&
-    not (Sys.file_exists (path done_dir (name ^ ".applied")))) (Sys.readdir done_dir) in
-  if waiting || applying then fail "409 Conflict" "Wait for hacks to finish"
-
-let transition id expected next =
-  let dir = Bj.Admin_data.published (data ()) (valid_id id) in
-  if not (Sys.file_exists dir) then fail "404 Not Found" "Unknown contest";
-  Bj.Contest.with_lock dir (fun () ->
-    let c = Bj.Contest.load dir in
-    if c.phase <> expected then fail "409 Conflict" "Contest phase has changed";
-    if next = Bj.Contest.Hacking then (match hack_readiness id c with
-      | None -> () | Some message -> fail "409 Conflict" message);
-    if next = Bj.Contest.Finished then finish_readiness id;
-    Bj.Contest.set_phase dir next);
-  redirect (manage_path id)
-
 let published_page id dir =
+  Bj.Schedule.advance (data ()) dir (int_of_float (Unix.time ()));
   let c = Bj.Contest.load dir in
   let entries kind =
     let folder = path (data ()) kind in
@@ -304,14 +309,13 @@ let published_page id dir =
     "</td><td>" ^ escape s.problem ^ "</td><td>" ^ escape status ^
     (if s.practice then " (practice)" else "") ^ "</td></tr>") recent in
   let problems = List.map (fun p -> "<li>" ^ escape (p.Bj.Contest.name ^ ": " ^ p.title) ^ "</li>") c.problems in
-  let phase, action = match c.phase with
-    | Bj.Contest.Ready -> "Ready", post_button (manage_path id ^ "/start") "Start contest"
-    | Bj.Contest.Running -> "Accepting submissions", post_button (manage_path id ^ "/stop") "Stop submissions"
-    | Bj.Contest.Stopped -> "Submissions stopped", (match hack_readiness id c with
-        | None -> post_button (manage_path id ^ "/hacks/start") "Start hacks"
-        | Some message -> "<p>" ^ escape message ^ "</p>")
-    | Bj.Contest.Hacking -> "Accepting hacks", post_button (manage_path id ^ "/hacks/stop") "Stop hacks"
-    | Bj.Contest.Finished -> "Finished", "" in
+  let phase = match c.phase with
+    | Bj.Contest.Ready -> "Ready"
+    | Bj.Contest.Running -> "Accepting submissions"
+    | Bj.Contest.Stopped -> "Submissions stopped; waiting for hacking"
+    | Bj.Contest.Hacking -> if Bj.Schedule.can_hack c (int_of_float (Unix.time ())) then "Accepting hacks"
+        else "Hacks closed; finalizing"
+    | Bj.Contest.Finished -> "Finished" in
   let hacks kind =
     let folder = path (path (data ()) "hacks") kind in
     List.filter_map (fun name ->
@@ -326,7 +330,8 @@ let published_page id dir =
     "<li>" ^ escape (h.author ^ " → " ^ h.target ^ ": " ^ result) ^ "</li>")
     (List.append (hacks "pending") (hacks "done")) in
   page ~contest:c c.title ("<p>Contest link: " ^ link (contest_path id) (contest_path id) ^ "</p>" ^
-    "<p>" ^ phase ^ "</p>" ^ action ^
+    "<p>" ^ phase ^ "</p>" ^ Account.schedule_info c ^
+    (if c.phase = Bj.Contest.Ready then schedule_form (manage_path id ^ "/schedule") c else "") ^
     "<p>" ^ string_of_int (List.length (List.filter (fun s -> not s.Bj.Sub.practice) all)) ^
     " official submissions; " ^
     string_of_int (List.length (List.filter (fun s -> s.Bj.Sub.practice) all)) ^ " practice; " ^
@@ -371,16 +376,13 @@ let handle parts =
   | "POST", [ "new" ] -> new_contest ()
   | "GET", [ id; "manage" ] -> view_contest id
   | "POST", [ id; "manage" ] -> update_contest id
+  | "POST", [ id; "manage"; "schedule" ] -> update_schedule id
   | "POST", [ id; "manage"; "p" ] -> add_problem id
   | "GET", [ id; "manage"; "p"; name ] -> draft_problem id (letter name)
   | "POST", [ id; "manage"; "p"; name ] -> edit_problem id name
   | "POST", [ id; "manage"; "p"; name; "tests" ] -> replace_tests id name
   | "POST", [ id; "manage"; "p"; name; "delete" ] -> ignore (form ()); delete_problem id name
   | "POST", [ id; "manage"; "publish" ] -> ignore (form ()); publish id
-  | "POST", [ id; "manage"; "start" ] -> ignore (form ()); transition id Bj.Contest.Ready Bj.Contest.Running
-  | "POST", [ id; "manage"; "stop" ] -> ignore (form ()); transition id Bj.Contest.Running Bj.Contest.Stopped
-  | "POST", [ id; "manage"; "hacks"; "start" ] -> ignore (form ()); transition id Bj.Contest.Stopped Bj.Contest.Hacking
-  | "POST", [ id; "manage"; "hacks"; "stop" ] -> ignore (form ()); transition id Bj.Contest.Hacking Bj.Contest.Finished
   | "POST", [ id; "manage"; "delete" ] -> ignore (form ()); delete_draft id
   | "GET", [ id; "manage"; "s"; sid ] -> view_submission (valid_id id) sid
   | _ -> fail "404 Not Found" "Not found"
