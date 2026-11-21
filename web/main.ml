@@ -45,7 +45,7 @@ let problem c name =
 
 let navigation active c = Account.contest_navigation (base c.Bj.Contest.id) active c
 
-let submit_form (c : Bj.Contest.t) selected =
+let submit_form (c : Bj.Contest.t) =
   match Account.current () with
   | None -> "<p>" ^ View.link ("/login?next=" ^ String.sub !prefix 1 (String.length !prefix - 1)) "Sign in" ^
       " or " ^ View.link "/signup" "create an account" ^ " to submit.</p>"
@@ -53,8 +53,8 @@ let submit_form (c : Bj.Contest.t) selected =
   let b = base c.Bj.Contest.id in
   let options = List.map (fun p ->
     let name = p.Bj.Contest.name in
-    "<option value=\"" ^ View.escape name ^ "\"" ^ (if name = selected then " selected" else "") ^
-    ">" ^ View.escape (name ^ ": " ^ p.title) ^ "</option>") c.problems in
+    "<option value=\"" ^ View.escape name ^ "\">" ^
+    View.escape (name ^ ": " ^ p.title) ^ "</option>") c.problems in
   "<form method=\"post\" enctype=\"multipart/form-data\" action=\"" ^ View.escape (b ^ "/submit") ^ "\">" ^
   "<p>Submitting as " ^ View.escape user.author ^ ".</p>" ^
   "<input type=\"hidden\" name=\"csrf\" value=\"" ^ user.csrf ^ "\">" ^
@@ -253,13 +253,12 @@ let get c tail =
   | [ "problems"; name ] when c.phase <> Bj.Contest.Ready ->
       let p = problem c (segment name) in
       let statement = Bj.File.read (path (path c.dir p.name) "statement.html") in
-      View.send "200 OK" markup (html p.title (navigation "Problems" c ^ statement ^
-        (if c.phase = Bj.Contest.Running || c.phase = Bj.Contest.Finished then submit_form c p.name else "")))
+      View.send "200 OK" markup (html p.title (navigation "Problems" c ^ statement))
   | [ "submit" ] ->
       if not (Bj.Schedule.can_submit c (int_of_float (Unix.time ())) || c.phase = Bj.Contest.Finished) then
         fail "403 Forbidden" "Contest is not accepting submissions";
       View.send "200 OK" markup (html "Submit" (navigation "Submit" c ^
-        (if c.phase = Bj.Contest.Running then Account.schedule_info c else "") ^ submit_form c ""))
+        (if c.phase = Bj.Contest.Running then Account.schedule_info c else "") ^ submit_form c))
   | [ "submissions"; id ] ->
       let s, verdict, ce = submission c id in
       let reveal = c.phase <> Bj.Contest.Running && c.phase <> Bj.Contest.Ready &&
