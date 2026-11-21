@@ -1,36 +1,10 @@
 bottled-judge
 =============
 
-Admin-created contests have problems, hidden tests, limits and hacking
-phases. Successful hacks test every accepted solution to that problem.
-Before publishing, the admin sets a UTC start and durations for submissions,
-judging intermission and hacks. The host moves phases automatically. Hacks
-open only after the intermission and official judging finish; hack submissions
-close at the deadline, and the contest finishes after queued hacks are applied.
-After a contest finishes, submissions become practice: they run the hidden
-tests and applied successful hacks without changing contest standings.
-The first local signup becomes admin. Everyone uses the same sign-in and
-contest pages; admin accounts see management controls. Submissions use their
-username@instance-domain identity.
+Contest judge with scheduled submission and hacking phases. Finished contests
+accept practice submissions without changing standings. Contests can be joined
+from another instance.
 
-For remote contests, a signed-in contestant pastes the host's HTTPS
-contest URL at /join. Each host assigns numeric contest IDs. Joined contests
-appear on the user's account and home pages. The home instance serves the
-contest pages and relays requests; the contest host stores and judges all
-work. Instances publish their signing keys at /api/federation/v1/key;
-contest hosts discover keys over HTTPS, without manual pairing. Each
-instance needs its own JUDGE_DOMAIN setting; this one defaults to
-judge.1.bottle.cloud. Only test installations may use
-JUDGE_ALLOW_HTTP_PEERS=1 to connect over HTTP.
+Contestant languages: C23, C++23, Rust, OCaml, Python 3.
 
-The judge runs on Debian 13 with OCaml 5.3 and Python 3 for contestant submissions,
-GCC/g++ 14.2 (C23/C++23) and Rust 1.85 (edition 2024).
-Only image packages are available. Dependencies cannot be downloaded.
-
-Per-test CPU limits are 100-10000 ms and memory settings are 32-1024 MB.
-Runs also have a wall timeout and 64 MiB output limit. Builds have
-separate 30 s and 2 GiB limits. Submissions run unprivileged without
-network access, with process limits and cleanup. This setup is for
-semi-trusted users only. Do not run untrusted code without stronger isolation.
-
-AGPLv3. See LICENSE.
+AGPLv3; see LICENSE.
