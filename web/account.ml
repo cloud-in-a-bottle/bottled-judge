@@ -48,6 +48,7 @@ let hash mode input =
   | _ -> invalid_arg "Invalid hashing mode"
 
 let account_file username = path (accounts ()) username
+let retired_file username = path (accounts ()) (".deleted-" ^ username)
 
 let read username =
   let fields, _ = Bj.Kv.read (account_file username) in
@@ -117,10 +118,17 @@ let signup name password =
   let encrypted = hash "hash" password in
   let epoch = random 16 in
   with_lock (fun () ->
-    if Sys.file_exists (account_file username) then invalid_arg "Username already taken";
+    if Sys.file_exists (account_file username) || Sys.file_exists (retired_file username) then
+      invalid_arg "Username already taken";
     let admin = not (Array.exists username_ok (Sys.readdir (accounts ()))) in
     write username encrypted epoch admin);
   new_session username epoch
+
+let delete username =
+  with_lock (fun () ->
+    if not (Sys.file_exists (account_file username)) then invalid_arg "Unknown user";
+    Bj.Admin_data.write (retired_file username) "" 0o600;
+    Unix.unlink (account_file username))
 
 let login name password =
   let username = normalize name in

@@ -165,13 +165,24 @@ let user_page name =
   page (Account.author username) (notice ^
     "<form method=\"post\" enctype=\"multipart/form-data\" action=\"/users/" ^ username ^ "/reset\">" ^ csrf () ^
     "<p><label>New password <input type=\"password\" name=\"password\" required minlength=\"12\" maxlength=\"128\" autocomplete=\"new-password\"></label></p>" ^
-    "<button>Reset password</button></form>")
+    "<button>Reset password</button></form>" ^
+    (if username = (admin ()).username then "" else
+      "<form method=\"post\" enctype=\"multipart/form-data\" action=\"/users/" ^ username ^ "/delete\">" ^
+      csrf () ^ "<button>Delete account</button></form>"))
 
 let reset_user name =
   let username = Account.normalize name in
   let fields = form () in
   (try Account.reset username (get fields "password") with Invalid_argument message -> bad message);
   redirect ("/users/" ^ username ^ "?reset=1")
+
+let delete_user name =
+  let username = Account.normalize name in
+  ignore (form ());
+  if not (Account.username_ok username) then fail "404 Not Found" "Unknown user";
+  if username = (admin ()).username then bad "Cannot delete your own account";
+  (try Account.delete username with Invalid_argument _ -> fail "404 Not Found" "Unknown user");
+  redirect "/users"
 
 let new_contest () =
   let title = contest_fields (form ()) in
@@ -372,6 +383,7 @@ let handle parts =
   | "GET", [ "users" ] -> list_users ()
   | "GET", [ "users"; name ] -> user_page name
   | "POST", [ "users"; name; "reset" ] -> reset_user name
+  | "POST", [ "users"; name; "delete" ] -> delete_user name
   | "GET", [ "new" ] -> page "New contest" (contest_form "/contests/new" "" "Create")
   | "POST", [ "new" ] -> new_contest ()
   | "GET", [ id; "manage" ] -> view_contest id
